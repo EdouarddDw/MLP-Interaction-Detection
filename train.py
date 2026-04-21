@@ -4,6 +4,15 @@ from synth import get_data, functions
 from config import EXPERIMENTS
 device = if torch.cuda.is_available() : 'cuda' else 'mps'
 
+
+    # basic parameters: --------------------------
+l2_const_set = 0.10
+dropout_rate = 0.2
+learning_rate_set = 0.01
+n_epochs_set = 100
+#--------------------------------------------
+
+
 # architecure of the model
 parameters = [
     'num_features' = 10,
@@ -13,30 +22,37 @@ parameters = [
 ]
 
 '''need to add:
-    - dropout logic
-    - make optimizer and l2 work with congif.py
-    - add data data_loader
+    - dropout logic [X]
+    - make optimizer and l2 work with congif.py [X]
+    - add data data_loader []
     - add snapshot logic and make it save properly in neet file for each function and experients.
-    - the double loop to train for every function and every experiment
+    - just the double loop to train for every function and every experiment
 ''''
 
 def train(
     net,
     data_loaders,
     criterion=nn.MSELoss(reduction="mean"),
-    nepochs=100,
+    nepochs=n_epochs_set,
     verbose=True,
-    dropout,
     L2 = False,
     l1_const=1e-4,
-    l2_const=0,
-    learning_rate=0.01,
+    learning_rate=learning_rate_set,
     opt_func,
     snapshots = True,
     snap_every = 5,
     device=torch.device(device),
 ):
-    optimizer = opt_func(net.parameters(), lr=learning_rate, weight_decay=l2_const)
+    if L2:
+        l2_const = l2_const_set
+    else:
+        l2_const = 0
+
+    if opt_func = 'sdg':
+        optimizer = nn.optimizer.sdg(net.parameters(), lr=learning_rate, weight_decay=l2_const)
+    if opt_func = 'adam':
+        optimizer = nn.optimizer.adam(net.parameters(), lr=learning_rate, weight_decay=l2_const)
+
 
     def evaluate(net, data_loader, criterion, device):
         losses = []
