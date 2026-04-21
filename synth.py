@@ -1,4 +1,11 @@
 import numpy as np
+import pandas
+def get_data(function, num_samples, noise, seed):
+    X, y, gt = function(num_samples =num_samples, seed = seed)
+    rng = np.random.default_rng(seed)
+    y_std = np.std(y)
+    y_noisy = y + rng.normal(0.0, noise * y_std, size=y.shape)
+    return X, y_noisy, gt
 
 def f1(num_samples = 30000, seed = 42):
     np.random.seed(seed)
@@ -32,6 +39,7 @@ def f2(num_samples = 30000, seed = 42):
     return X, y, interactions
 
 def f3(num_samples = 30000, seed = 42):
+    
     np.random.seed(seed)
     X = np.random.uniform(low=-1, high=1, size=(num_samples, 10))
     x1, x2, x3, x4, x5, x6, x7, x8, x9, x10 = X.T
@@ -144,3 +152,15 @@ def f10(num_samples = 30000, seed = 42):
     return X, y, interactions
 
 functions = [f1,f2,f3,f4,f5,f6,f7,f8,f9,f10]
+
+def main():
+    #just a test
+    data = get_data(f1, num_samples = 3000, noise = 0.1, seed = 42)
+    print("X: ", data[0][:5])
+    print("Y: ", data[1][:5])
+    print("GT: ", data[2])
+if __name__ == "__main__":
+    main()
+
+
+
