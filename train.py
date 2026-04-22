@@ -1,4 +1,5 @@
 import torch
+from torch.utils.data import TensorDataset, DataLoader, random_split
 from multilayer_perceptron import MLP
 from synth import get_data, functions
 from config import EXPERIMENTS
@@ -6,6 +7,7 @@ device = if torch.cuda.is_available() : 'cuda' else 'mps'
 
 
     # basic parameters: --------------------------
+set_seed = 42
 l2_const_set = 0.10
 dropout_rate = 0.2
 learning_rate_set = 0.01
@@ -114,6 +116,61 @@ def train(
         print("Finished Training. Test loss: ", test_loss)
 
     return net, test_loss
+
+def make_data_loaders(function, num_samples, noise, seed, batch_size=64, val_ratio=0.2):
+    X, y, gt = get_data(function, num_samples=num_samples, noise=noise, seed=seed)
+
+    X_tensor = torch.tensor(X, dtype=torch.float32)
+    y_tensor = torch.tensor(y, dtype=torch.float32).unsqueeze(1)
+
+    dataset = TensorDataset(X_tensor, y_tensor)
+
+    n_total = len(dataset)
+    n_val = int(val_ratio * n_total)
+    n_train = n_total - n_val
+
+    train_dataset, val_dataset = random_split(dataset, [n_train, n_val])
+
+    data_loaders = {
+        "train": DataLoader(train_dataset, batch_size=batch_size, shuffle=True),
+        "val": DataLoader(val_dataset, batch_size=batch_size, shuffle=False),
+    }
+
+    return data_loaders, gt
+
+    for f in functions:
+        for e in experients:
+            
+           data_loaders, gt = make_data_loaders(
+                function=f,
+                num_samples = 30000,
+                noise= e["noise"],
+                seed = set_seed,
+                batch_size = 64,
+                val_ratio = 0.2,
+            )
+
+            
+            model_parameters = {
+                **base_parameters,
+                "dropout": e["dropout"],
+            }
+
+            net = MLP(**model_parameters).to(device)
+            
+            train(
+                net=net,
+                data_loader = data_loaders,
+                verbose = True,
+                L2 = e["weight_decay"],
+                opt_func = e["optimizer"],
+                snapshot = True,
+                snap_every = 1,
+            )
+
+
+
+
 
 
 
