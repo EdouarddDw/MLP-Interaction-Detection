@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.optim as optim
 import copy
 
-
 def get_weights(model):
     weights = []
     for name, param in model.named_parameters():
@@ -20,14 +19,14 @@ class MLP(nn.Module):
         hidden_units,
         use_main_effect_nets=False,
         main_effect_net_units=[10, 10, 10],
-        dropout:0.0,
+        dropout = 0.0,
     ):
         super(MLP, self).__init__()
 
         self.hidden_units = hidden_units
         self.use_main_effect_nets = use_main_effect_nets
         self.dropout = dropout
-        self.interaction_mlp = create_mlp([num_features] + hidden_units + [1], self.dropout = dropout)
+        self.interaction_mlp = create_mlp([num_features] + hidden_units + [1], dropout = dropout)
 
         if main_effect_net_units == [1]:
             use_linear = True
@@ -56,7 +55,7 @@ class MLP(nn.Module):
 
     def create_main_effect_nets(self, num_features, hidden_units, out_bias, name):
         mlp_list = [
-            create_mlp([1] + hidden_units + [1], out_bias=out_bias, self.dropout = dropout)
+            create_mlp([1] + hidden_units + [1], out_bias=out_bias, dropout=self.dropout)
             for _ in range(num_features)
         ]
         for i in range(num_features):
@@ -71,14 +70,14 @@ class MLP(nn.Module):
         return forwarded_mlp
 
 
-def create_mlp(layer_sizes, out_bias=True):
+def create_mlp(layer_sizes, out_bias=True, dropout=0.0):
     ls = list(layer_sizes)
     layers = []
     for i in range(1, len(ls) - 1):
         layers.append(nn.Linear(int(ls[i - 1]), int(ls[i])))
         layers.append(nn.ReLU())
         if dropout > 0:
-            layers.append(nn.Droupout(p=dropout))
+            layers.append(nn.Dropout(p=dropout))
     layers.append(nn.Linear(int(ls[-2]), int(ls[-1]), bias=out_bias))
     return nn.Sequential(*layers)
 
