@@ -1,3 +1,5 @@
+import csv
+import json
 import torch
 import torch.nn as nn
 from pathlib import Path
@@ -68,6 +70,7 @@ def train(
     snapshot_root="snapshots",
     function_name="unknown_function",
     experiment_name="unknown_experiment",
+    experiment_settings=None,
     device=device,
 ):
     if criterion is None:
@@ -89,10 +92,24 @@ def train(
     net.to(device)
     best_loss = float("inf")
     best_state_dict = None
+    best_epoch = None
+    best_snapshot = None
 
     snapshot_dir = Path(snapshot_root) / function_name / experiment_name
     if snapshots:
         snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    metrics_file = snapshot_dir / "metrics.csv"
+    experiment_settings = experiment_settings or {}
+    experiment_settings_str = json.dumps(experiment_settings, sort_keys=True)
+
+    if snapshots and not metrics_file.exists():
+        with metrics_file.open("w", newline="") as csv_file:
+            writer = csv.DictWriter(
+                csv_file,
+                fieldnames=["epoch", "train_loss", "val_loss", "experiment_settings"],
+            )
+            writer.writeheader()
 
     for epoch in range(nepochs):
         net.train()
@@ -122,7 +139,7 @@ def train(
         key = "val" if "val" in data_loaders else "train"
         val_loss = evaluate(net, data_loaders[key], criterion, device)
 
-        if snapshots and (epoch + 1) % snap_every == 0:
+        if snapshots and ((epoch + 1) <= 20 or (epoch + 1) % snap_every == 0):
             snapshot_file = snapshot_dir / f"epoch_{epoch + 1:04d}.pt"
             torch.save(
                 {
@@ -137,10 +154,35 @@ def train(
                 snapshot_file,
             )
 
+        if snapshots:
+            with metrics_file.open("a", newline="") as csv_file:
+                writer = csv.DictWriter(
+                    csv_file,
+                    fieldnames=["epoch", "train_loss", "val_loss", "experiment_settings"],
+                )
+                writer.writerow(
+                    {
+                        "epoch": epoch + 1,
+                        "train_loss": running_loss / max(run_count, 1),
+                        "val_loss": val_loss.item(),
+                        "experiment_settings": experiment_settings_str,
+                    }
+                )
+
         if val_loss.item() < best_loss:
             best_loss = val_loss.item()
+            best_epoch = epoch + 1
             best_state_dict = {
                 k: v.detach().cpu().clone() for k, v in net.state_dict().items()
+            }
+            best_snapshot = {
+                "epoch": best_epoch,
+                "function": function_name,
+                "experiment": experiment_name,
+                "model_state_dict": best_state_dict,
+                "optimizer_state_dict": optimizer.state_dict(),
+                "train_loss": running_loss / max(run_count, 1),
+                "val_loss": val_loss.item(),
             }
 
         if verbose and epoch % 2 == 0:
@@ -151,6 +193,10 @@ def train(
 
     if best_state_dict is not None:
         net.load_state_dict(best_state_dict)
+
+    if snapshots and best_snapshot is not None:
+        best_snapshot_file = snapshot_dir / f"best_epoch_{best_epoch:04d}.pt"
+        torch.save(best_snapshot, best_snapshot_file)
 
     if "test" in data_loaders:
         key = "test"
@@ -227,6 +273,10 @@ def run_experiments():
                 snap_every=1,
                 function_name=function_name,
                 experiment_name=experiment_name,
+                experiment_settings={
+                    **base_parameters,
+                    **e,
+                },
                 learning_rate=e.get("learning_rate", learning_rate_set),
             )
 
