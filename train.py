@@ -36,7 +36,7 @@ base_parameters = {
     - dropout logic [X]
     - make optimizer and l2 work with config.py [X]
     - add data_loader [X]
-    - add snapshot logic and make it save properly in neat file for each function and experiment [1/2]
+    - add snapshot logic and make it save properly in neat file for each function and experiment [X]
     - just the double loop to train for every function and every experiment [X]
 """
 
