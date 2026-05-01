@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from torch.utils import data
 from multilayer_perceptron import *
-from utils import *
 
 
 def preprocess_weights(weights):
