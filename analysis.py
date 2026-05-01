@@ -78,6 +78,30 @@ def get_ground_truth_interactions(function, num_samples=30000, noise=0.0, seed=4
     return set(frozenset(inter) for inter in gt_interactions)
 
 
+def _is_numeric(value):
+    return isinstance(value, (int, float, np.integer, np.floating))
+
+
+def _normalize_gt_interactions(gt_interactions):
+    normalized = []
+    for interaction in gt_interactions:
+        normalized.append(frozenset(int(feature) for feature in interaction))
+    return normalized
+
+
+def _normalize_nid_interactions(nid_interactions):
+    normalized = []
+    for interaction in nid_interactions:
+        if isinstance(interaction, tuple) and len(interaction) == 2 and _is_numeric(interaction[1]):
+            features, strength = interaction
+            feature_set = frozenset(int(feature) + 1 for feature in features)
+            normalized.append((feature_set, float(strength)))
+        else:
+            feature_set = frozenset(int(feature) for feature in interaction)
+            normalized.append((feature_set, 1.0))
+    return normalized
+
+
 def is_exact_or_superset(nid_tuple, gt_set):
     """
     Check if NID-detected interaction is exact match or superset of GT interaction.
@@ -93,6 +117,111 @@ def is_exact_or_superset(nid_tuple, gt_set):
     # Convert NID 0-indexed tuple to 1-indexed set
     nid_set = frozenset(i + 1 for i in nid_tuple)
     return nid_set >= gt_set  # Superset or equal
+
+
+def match_interactions_one_to_one(gt_interactions, nid_interactions):
+    """
+    Match ground truth interactions to NID-detected interactions using one-to-one matching.
+
+    Each GT interaction and each NID interaction can be used at most once.
+    Exact matches are assigned first.
+    Superset matches are assigned second, preferring the smallest valid superset.
+
+    Parameters
+    ----------
+    gt_interactions : iterable of sets or frozensets
+        Ground truth feature interactions, using 1-indexed feature ids.
+    nid_interactions : iterable
+        Detected NID interactions. This may be either:
+        - iterable of sets/frozensets using 1-indexed feature ids
+        - iterable of tuples like ((0, 1), strength), where detected features are 0-indexed
+
+    Returns
+    -------
+    dict with:
+        num_exact_matched
+        num_superset_matched_unique
+        num_matched
+        matched_pairs
+    """
+    normalized_gt = _normalize_gt_interactions(gt_interactions)
+    normalized_nid = _normalize_nid_interactions(nid_interactions)
+
+    gt_used = [False] * len(normalized_gt)
+    nid_used = [False] * len(normalized_nid)
+    matched_pairs = []
+
+    for gt_index, gt_set in enumerate(normalized_gt):
+        if gt_used[gt_index]:
+            continue
+        for nid_index, (nid_set, strength) in enumerate(normalized_nid):
+            if nid_used[nid_index]:
+                continue
+            if nid_set == gt_set:
+                gt_used[gt_index] = True
+                nid_used[nid_index] = True
+                matched_pairs.append(
+                    {
+                        "gt": gt_set,
+                        "nid": nid_set,
+                        "match_type": "exact",
+                        "extra_features": 0,
+                        "strength": strength,
+                    }
+                )
+                break
+
+    candidate_pairs = []
+    for gt_index, gt_set in enumerate(normalized_gt):
+        if gt_used[gt_index]:
+            continue
+        for nid_index, (nid_set, strength) in enumerate(normalized_nid):
+            if nid_used[nid_index]:
+                continue
+            if nid_set > gt_set:
+                extra_features = len(nid_set) - len(gt_set)
+                candidate_pairs.append(
+                    (
+                        extra_features,
+                        -float(strength),
+                        len(nid_set),
+                        gt_index,
+                        nid_index,
+                    )
+                )
+
+    candidate_pairs.sort()
+
+    for extra_features, neg_strength, _, gt_index, nid_index in candidate_pairs:
+        if gt_used[gt_index] or nid_used[nid_index]:
+            continue
+
+        gt_set = normalized_gt[gt_index]
+        nid_set, strength = normalized_nid[nid_index]
+
+        if nid_set > gt_set:
+            gt_used[gt_index] = True
+            nid_used[nid_index] = True
+            matched_pairs.append(
+                {
+                    "gt": gt_set,
+                    "nid": nid_set,
+                    "match_type": "superset",
+                    "extra_features": extra_features,
+                    "strength": strength,
+                }
+            )
+
+    num_exact_matched = sum(1 for pair in matched_pairs if pair["match_type"] == "exact")
+    num_superset_matched_unique = sum(1 for pair in matched_pairs if pair["match_type"] == "superset")
+    num_matched = len(matched_pairs)
+
+    return {
+        "num_exact_matched": num_exact_matched,
+        "num_superset_matched_unique": num_superset_matched_unique,
+        "num_matched": num_matched,
+        "matched_pairs": matched_pairs,
+    }
 
 
 def compute_auroc_data(gt_interactions, nid_interactions):
@@ -280,7 +409,10 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
             'recall': float or None,
             'num_gt': int,
             'num_detected': int,
+            'num_exact_matched': int,
+            'num_superset_matched_unique': int,
             'num_matched': int,
+            'matched_pairs': list,
             'best_epoch': int,
             'val_loss': float,
             'success': bool,
@@ -302,7 +434,10 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
         "recall": None,
         "num_gt": 0,
         "num_detected": 0,
+        "num_exact_matched": 0,
+        "num_superset_matched_unique": 0,
         "num_matched": 0,
+        "matched_pairs": [],
         "best_epoch": -1,
         "val_loss": float("inf"),
         "success": False,
@@ -330,28 +465,28 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
         
         # Get ground truth interactions
         gt_interactions = get_ground_truth_interactions(function, num_samples, noise, seed)
+
+        # Compute one-to-one matching metrics regardless of whether AUROC can be formed.
+        matching = match_interactions_one_to_one(gt_interactions, nid_interactions)
         
         # Compute AUROC data
         scores, labels = compute_auroc_data(gt_interactions, nid_interactions)
         
         if scores is None:
             # Not enough samples
+            result["num_exact_matched"] = matching["num_exact_matched"]
+            result["num_superset_matched_unique"] = matching["num_superset_matched_unique"]
+            result["num_matched"] = matching["num_matched"]
+            result["matched_pairs"] = matching["matched_pairs"]
             result["num_gt"] = len(gt_interactions)
             result["num_detected"] = len(nid_interactions)
             result["best_epoch"] = epoch
             result["val_loss"] = val_loss
+            result["success"] = True
             return result
         
         # Compute metrics
         metrics = compute_metrics(scores, labels)
-        
-        # Count matched interactions
-        num_matched = 0
-        for gt_inter in gt_interactions:
-            for nid_tuple, _ in nid_interactions:
-                if is_exact_or_superset(nid_tuple, gt_inter):
-                    num_matched += 1
-                    break
         
         result.update({
             "auroc": metrics["auroc"],
@@ -359,7 +494,10 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
             "recall": metrics["recall"],
             "num_gt": len(gt_interactions),
             "num_detected": len(nid_interactions),
-            "num_matched": num_matched,
+            "num_exact_matched": matching["num_exact_matched"],
+            "num_superset_matched_unique": matching["num_superset_matched_unique"],
+            "num_matched": matching["num_matched"],
+            "matched_pairs": matching["matched_pairs"],
             "best_epoch": epoch,
             "val_loss": val_loss,
             "success": True,

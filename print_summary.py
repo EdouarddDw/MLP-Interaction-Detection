@@ -25,6 +25,9 @@ combined_df = pd.concat(all_results, ignore_index=True)
 total_experiments = len(combined_df)
 successful = combined_df['success'].sum()
 auroc_values = combined_df['auroc'].dropna()
+num_exact = combined_df['num_exact_matched'].sum() if 'num_exact_matched' in combined_df.columns else None
+num_superset = combined_df['num_superset_matched_unique'].sum() if 'num_superset_matched_unique' in combined_df.columns else None
+num_total_matched = combined_df['num_matched'].sum() if 'num_matched' in combined_df.columns else None
 
 print(f"Total experiments analyzed: {total_experiments}")
 print(f"Successful analyses: {successful} ({100*successful/total_experiments:.1f}%)")
@@ -39,6 +42,15 @@ if len(auroc_values) > 0:
     print(f"  Min AUROC:      {auroc_values.min():.4f}")
     print(f"  Max AUROC:      {auroc_values.max():.4f}")
     print()
+
+print("MATCH STATISTICS:")
+if num_total_matched is not None:
+    print(f"  Total one-to-one matches: {int(num_total_matched)}")
+if num_exact is not None:
+    print(f"  Exact matches:            {int(num_exact)}")
+if num_superset is not None:
+    print(f"  Superset matches:         {int(num_superset)}")
+print()
 
 # Statistics by function
 print("AUROC BY FUNCTION:")
@@ -75,17 +87,27 @@ print()
 
 # Top performers
 print("TOP 15 AUROC PERFORMANCES:")
-top_df = combined_df.nlargest(15, 'auroc')[['function_name', 'experiment_name', 'auroc', 'num_gt', 'num_detected', 'num_matched']]
+top_columns = ['function_name', 'experiment_name', 'auroc', 'num_gt', 'num_detected']
+for optional_column in ['num_exact_matched', 'num_superset_matched_unique', 'num_matched']:
+    if optional_column in combined_df.columns:
+        top_columns.append(optional_column)
+top_df = combined_df.nlargest(15, 'auroc')[top_columns]
 for idx, row in enumerate(top_df.itertuples(), 1):
-    print(f"  {idx:2d}. {row.function_name}/{row.experiment_name:20s} AUROC={row.auroc:.4f} (GT:{row.num_gt} Detected:{row.num_detected} Matched:{row.num_matched})")
+    exact = getattr(row, 'num_exact_matched', 'n/a')
+    superset = getattr(row, 'num_superset_matched_unique', 'n/a')
+    matched = getattr(row, 'num_matched', 'n/a')
+    print(f"  {idx:2d}. {row.function_name}/{row.experiment_name:20s} AUROC={row.auroc:.4f} (GT:{row.num_gt} Detected:{row.num_detected} Exact:{exact} Superset:{superset} Total:{matched})")
 
 print()
 
 # Worst performers (with valid AUROC)
 print("BOTTOM 15 AUROC PERFORMANCES (with valid scores):")
-bottom_df = combined_df[combined_df['auroc'].notna()].nsmallest(15, 'auroc')[['function_name', 'experiment_name', 'auroc', 'num_gt', 'num_detected', 'num_matched']]
+bottom_df = combined_df[combined_df['auroc'].notna()].nsmallest(15, 'auroc')[top_columns]
 for idx, row in enumerate(bottom_df.itertuples(), 1):
-    print(f"  {idx:2d}. {row.function_name}/{row.experiment_name:20s} AUROC={row.auroc:.4f} (GT:{row.num_gt} Detected:{row.num_detected} Matched:{row.num_matched})")
+    exact = getattr(row, 'num_exact_matched', 'n/a')
+    superset = getattr(row, 'num_superset_matched_unique', 'n/a')
+    matched = getattr(row, 'num_matched', 'n/a')
+    print(f"  {idx:2d}. {row.function_name}/{row.experiment_name:20s} AUROC={row.auroc:.4f} (GT:{row.num_gt} Detected:{row.num_detected} Exact:{exact} Superset:{superset} Total:{matched})")
 
 print()
 print("="*80)
