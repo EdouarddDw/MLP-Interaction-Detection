@@ -119,6 +119,23 @@ def is_exact_or_superset(nid_tuple, gt_set):
     return nid_set >= gt_set  # Superset or equal
 
 
+def is_exact_match(nid_tuple, gt_set):
+    """
+    Check if NID-detected interaction exactly matches GT interaction.
+    NID indices are 0-indexed; GT sets are 1-indexed.
+    
+    Args:
+        nid_tuple: 0-indexed tuple from NID (e.g., (0, 1, 2))
+        gt_set: 1-indexed frozenset from GT (e.g., frozenset({1, 2, 3}))
+    
+    Returns:
+        bool: True if NID detection exactly equals GT
+    """
+    # Convert NID 0-indexed tuple to 1-indexed set
+    nid_set = frozenset(i + 1 for i in nid_tuple)
+    return nid_set == gt_set  # Exact match only
+
+
 def match_interactions_one_to_one(gt_interactions, nid_interactions):
     """
     Match ground truth interactions to NID-detected interactions using one-to-one matching.
@@ -230,9 +247,9 @@ def compute_auroc_data(gt_interactions, nid_interactions):
     
     For each GT interaction:
       - Label = 1 (ground truth positive)
-      - Score = NID strength if exact/superset match found, else 0
+      - Score = NID strength if exact match found, else 0
     
-    For each unmatched NID detection (not a superset of any GT):
+    For each unmatched NID detection (not a subset of any GT):
       - Label = 0 (false positive candidate)
       - Score = NID strength
     
@@ -255,9 +272,9 @@ def compute_auroc_data(gt_interactions, nid_interactions):
         best_score = 0.0
         best_idx = None
         
-        # Find best matching NID detection (highest strength among supersets/exact matches)
+        # Find exact matching NID detection only
         for idx, (nid_tuple, strength) in enumerate(nid_interactions):
-            if is_exact_or_superset(nid_tuple, gt_inter):
+            if is_exact_match(nid_tuple, gt_inter):
                 if strength > best_score:
                     best_score = strength
                     best_idx = idx
@@ -274,7 +291,7 @@ def compute_auroc_data(gt_interactions, nid_interactions):
     for idx, (nid_tuple, strength) in enumerate(nid_interactions):
         if idx not in matched_nid_indices:
             # Check if this NID detection is a subset of any GT interaction
-            # (if so, it's "covered" and should be considered a false positive attempt)
+            # (if so, it's "covered" and should be excluded from negatives)
             nid_set = frozenset(i + 1 for i in nid_tuple)
             is_subset_of_gt = any(nid_set < gt_inter for gt_inter in gt_interactions)
             
