@@ -85,6 +85,31 @@ for opt in combined_df['optimizer'].unique():
 
 print()
 
+# Statistics by regularization setting
+print("AUROC BY REGULARIZATION SETTING:")
+reg_settings = {
+    "No regularisation": (
+        (combined_df['dropout'] == 0.0) & (combined_df['weight_decay'] == False)
+    ),
+    "Dropout only": (
+        (combined_df['dropout'] > 0.0) & (combined_df['weight_decay'] == False)
+    ),
+    "Weight decay only": (
+        (combined_df['dropout'] == 0.0) & (combined_df['weight_decay'] == True)
+    ),
+    "Dropout + weight decay": (
+        (combined_df['dropout'] > 0.0) & (combined_df['weight_decay'] == True)
+    ),
+}
+for setting_name, mask in reg_settings.items():
+    setting_df = combined_df[mask]
+    setting_aurocs = setting_df['auroc'].dropna()
+    if len(setting_aurocs) > 0:
+        mean_auroc = setting_aurocs.mean()
+        print(f"  {setting_name}: {mean_auroc:.4f} (mean, n={len(setting_aurocs)})")
+
+print()
+
 # Top performers
 print("TOP 15 AUROC PERFORMANCES:")
 top_columns = ['function_name', 'experiment_name', 'auroc', 'num_gt', 'num_detected']
