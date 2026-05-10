@@ -1,0 +1,213 @@
+
+<style>
+  body{background:#F2F0E9}
+  h2.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+  .fn-pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+  .fn-pill{font-size:12px;font-weight:500;padding:4px 12px;border-radius:20px;border:0.5px solid var(--color-border-secondary);background:var(--color-background-primary);color:var(--color-text-secondary);cursor:pointer;transition:all .15s}
+  .fn-pill.active{background:var(--color-background-secondary);color:var(--color-text-primary);border-color:var(--color-border-primary)}
+  .meta{display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap}
+  .meta-item{font-size:12px;color:var(--color-text-secondary)}
+  .meta-val{font-weight:500;color:var(--color-text-primary)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
+  .leg-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--color-text-secondary)}
+  .leg-swatch{width:24px;height:3px;border-radius:2px}
+</style>
+<h2 class="sr-only">Interactive feature interaction graph. Select a function to see which features interact with each other, shown as a circular node-edge diagram colored by interaction group.</h2>
+
+<div class="fn-pills" id="pills"></div>
+<div class="meta" id="meta"></div>
+<canvas id="canvas" width="640" height="380" style="width:100%;display:block;border-radius:var(--border-radius-lg);border:0.5px solid var(--color-border-tertiary)"></canvas>
+<div class="legend" id="legend"></div>
+
+<script>
+const functions = [
+  {name:'f1', domain:'[0,1] mixed', interactions:[[1,2,3],[3,5],[7,8,9,10],[2,7]]},
+  {name:'f2', domain:'[−1,1]',      interactions:[[1,2,3],[3,5],[7,8,9,10],[2,7]]},
+  {name:'f3', domain:'[−1,1]',      interactions:[[1,2],[2,3],[3,4],[4,5,7,8]]},
+  {name:'f4', domain:'[−1,1]',      interactions:[[1,2],[2,3],[3,4],[1,4],[4,5,7,8]]},
+  {name:'f5', domain:'[−1,1]',      interactions:[[1,2,3],[4,5],[6,7],[8,9,10]]},
+  {name:'f6', domain:'[−1,1]',      interactions:[[1,2],[3,4],[5,6,8],[8,9,10]]},
+  {name:'f7', domain:'[−1,1]',      interactions:[[1,2],[3,4,6],[4,5,6,7,8],[7,9]]},
+  {name:'f8', domain:'[−1,1]',      interactions:[[1,2],[3,5,6],[3,4,5,7],[7,8,9]]},
+  {name:'f9', domain:'[−1,1]',      interactions:[[1,2,3,4,5],[5,6],[6,7,8],[9,10]]},
+  {name:'f10',domain:'[−1,1]',      interactions:[[1,2],[3,5,7],[4,5],[7,9]]}
+];
+
+const GROUP_COLORS = ['#6E63D9','#1F8E6D','#C5522C','#1F5D9A'];
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 640, H = 380, CX = W/2, CY = H/2 + 10;
+const R = 148;
+const N = 10;
+
+function isDark(){return matchMedia('(prefers-color-scheme: dark)').matches}
+function gc(i){return GROUP_COLORS[i%4]}
+function textColor(){return '#2f2f2c'}
+function mutedColor(){return '#7b7972'}
+function bgColor(){return '#F2F0E9'}
+function borderColor(){return 'rgba(0,0,0,0.16)'}
+function nodeBg(){return '#f4f2eb'}
+
+function nodePos(i){
+  const angle = (2*Math.PI*i/N) - Math.PI/2;
+  return {x: CX + R*Math.cos(angle), y: CY + R*Math.sin(angle)};
+}
+
+let currentFn = 0;
+
+function getEdges(interactions){
+  const edges = [];
+  const edgeGroup = {};
+  interactions.forEach((grp,gi)=>{
+    for(let a=0;a<grp.length;a++){
+      for(let b=a+1;b<grp.length;b++){
+        const key = [grp[a]-1,grp[b]-1].sort().join('-');
+        if(!edgeGroup[key]) edgeGroup[key]=[];
+        edgeGroup[key].push(gi);
+        if(edgeGroup[key].length===1) edges.push({a:grp[a]-1,b:grp[b]-1,groups:edgeGroup[key]});
+      }
+    }
+  });
+  return {edges, edgeGroup};
+}
+
+function getNodeGroup(node, interactions){
+  for(let gi=0;gi<interactions.length;gi++){
+    if(interactions[gi].includes(node+1)) return gi;
+  }
+  return -1;
+}
+
+function getNodeGroups(node, interactions){
+  const gs=[];
+  interactions.forEach((grp,gi)=>{if(grp.includes(node+1))gs.push(gi);});
+  return gs;
+}
+
+function draw(fnIdx, animate){
+  const fn = functions[fnIdx];
+  const {interactions} = fn;
+  const {edges, edgeGroup} = getEdges(interactions);
+  const activeNodes = new Set();
+  interactions.forEach(g=>g.forEach(v=>activeNodes.add(v-1)));
+
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = bgColor();
+  ctx.fillRect(0,0,W,H);
+
+  edges.forEach(({a,b,groups})=>{
+    const pa=nodePos(a), pb=nodePos(b);
+    const key=[a,b].sort().join('-');
+    const gs = edgeGroup[key];
+    if(gs.length>1){
+      gs.forEach((gi,si)=>{
+        const off=(si-(gs.length-1)/2)*3;
+        const dx=pb.x-pa.x, dy=pb.y-pa.y;
+        const len=Math.sqrt(dx*dx+dy*dy);
+        const nx=-dy/len*off, ny=dx/len*off;
+        ctx.beginPath();
+        ctx.moveTo(pa.x+nx,pa.y+ny);
+        ctx.lineTo(pb.x+nx,pb.y+ny);
+        ctx.strokeStyle=gc(gi);
+        ctx.lineWidth=2;
+        ctx.globalAlpha=0.7;
+        ctx.stroke();
+      });
+      ctx.globalAlpha=1;
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(pa.x,pa.y);
+      ctx.lineTo(pb.x,pb.y);
+      ctx.strokeStyle=gc(gs[0]);
+      ctx.lineWidth=2.5;
+      ctx.globalAlpha=0.65;
+      ctx.stroke();
+      ctx.globalAlpha=1;
+    }
+  });
+
+  for(let i=0;i<N;i++){
+    const {x,y}=nodePos(i);
+    const groups=getNodeGroups(i,interactions);
+    const active=activeNodes.has(i);
+    const r=active?18:13;
+
+    ctx.beginPath();
+    ctx.arc(x,y,r,0,2*Math.PI);
+    ctx.fillStyle=active?(groups.length>1?nodeBg():gc(groups[0])+'33'):nodeBg();
+    ctx.fill();
+    ctx.strokeStyle=active?(groups.length>1?borderColor():gc(groups[0])):borderColor();
+    ctx.lineWidth=active?2:0.5;
+    ctx.globalAlpha=active?1:0.4;
+    ctx.stroke();
+    ctx.globalAlpha=1;
+
+    if(active&&groups.length>1){
+      const segAngle=(2*Math.PI)/groups.length;
+      groups.forEach((gi,si)=>{
+        ctx.beginPath();
+        ctx.moveTo(x,y);
+        ctx.arc(x,y,r,si*segAngle-Math.PI/2,(si+1)*segAngle-Math.PI/2);
+        ctx.closePath();
+        ctx.fillStyle=gc(gi)+'55';
+        ctx.fill();
+      });
+      ctx.beginPath();
+      ctx.arc(x,y,r,0,2*Math.PI);
+      ctx.strokeStyle=borderColor();
+      ctx.lineWidth=1.5;
+      ctx.stroke();
+    }
+
+    ctx.font=`${active?500:400} ${active?13:11}px "Anthropic Sans",sans-serif`;
+    ctx.fillStyle=active?textColor():mutedColor();
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.fillText('x'+(i+1),x,y);
+  }
+
+  updateMeta(fn);
+  updateLegend(interactions);
+}
+
+function updateMeta(fn){
+  const totalEdges = new Set();
+  fn.interactions.forEach(g=>{
+    for(let a=0;a<g.length;a++)for(let b=a+1;b<g.length;b++)
+      totalEdges.add([g[a]-1,g[b]-1].sort().join('-'));
+  });
+  const activeNodes=new Set();
+  fn.interactions.forEach(g=>g.forEach(v=>activeNodes.add(v)));
+  document.getElementById('meta').innerHTML=`
+    <div class="meta-item">Interaction groups: <span class="meta-val">${fn.interactions.length}</span></div>
+    <div class="meta-item">Active features: <span class="meta-val">${activeNodes.size} / 10</span></div>
+    <div class="meta-item">Edges: <span class="meta-val">${totalEdges.size}</span></div>
+    <div class="meta-item">Domain: <span class="meta-val">${fn.domain}</span></div>
+    <div class="meta-item">Group sizes: <span class="meta-val">${fn.interactions.map(g=>g.length).join(', ')}</span></div>
+  `;
+}
+
+function updateLegend(interactions){
+  document.getElementById('legend').innerHTML = interactions.map((grp,gi)=>
+    `<div class="leg-item"><div class="leg-swatch" style="background:${gc(gi)}"></div>Group ${gi+1}: {x<sub>${grp.join('</sub>, x<sub>')}</sub>}</div>`
+  ).join('');
+}
+
+const pillsEl=document.getElementById('pills');
+functions.forEach((fn,i)=>{
+  const btn=document.createElement('button');
+  btn.className='fn-pill'+(i===0?' active':'');
+  btn.textContent=fn.name;
+  btn.onclick=()=>{
+    document.querySelectorAll('.fn-pill').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    currentFn=i;
+    draw(i);
+  };
+  pillsEl.appendChild(btn);
+});
+
+draw(0);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>draw(currentFn));
+</script>
