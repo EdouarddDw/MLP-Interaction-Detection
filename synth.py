@@ -159,6 +159,10 @@ def main():
     print("X: ", data[0][:5])
     print("Y: ", data[1][:5])
     print("GT: ", data[2])
+    
+    for f in functions:
+        print()
+        print(f.__name__, get_data(f, num_samples = 3000, noise = 0.1, seed = 42)[2])
 if __name__ == "__main__":
     main()
 
