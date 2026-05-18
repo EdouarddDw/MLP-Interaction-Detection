@@ -8,7 +8,7 @@ from torch.utils.data import TensorDataset, DataLoader, random_split
 from multilayer_perceptron import MLP
 from synth import get_data, functions
 from config import EXPERIMENTS
-
+from missing_exp import MISSING
 
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
