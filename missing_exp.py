@@ -1,4 +1,4 @@
-EXPERIMENTS = [
+MISSING = [
     # missing weight decay and dropout for no noise experiements
     {"name": "base_sgd_dp",    "noise": 0,   "optimizer": "sgd",  "dropout": 0.2, "weight_decay": False},
     {"name": "base_sgd_wd",    "noise": 0,   "optimizer": "sgd",  "dropout": 0.0, "weight_decay": True},
