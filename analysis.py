@@ -695,6 +695,58 @@ def print_summary(all_results):
         print(f"  {i:2d}. {func}/{exp:20s} → AUROC = {auroc:.4f}")
 
 
+def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots"):
+    """
+    Apply NID at every saved epoch checkpoint and return AUROC over time.
+    Returns list of (epoch, auroc) tuples.
+    """
+    function_name = function.__name__
+    experiment_name = experiment_settings["name"]
+    snapshot_dir = Path(snapshot_root) / function_name / experiment_name
+    
+    # Get all epoch checkpoints (not just best)
+    epoch_files = sorted(snapshot_dir.glob("epoch_*.pt"))
+    gt = get_ground_truth_interactions(function)
+    
+    trajectory = []
+    for epoch_file in epoch_files:
+        m = re.search(r"epoch_(\d{4})\.pt$", epoch_file.name)
+        if not m:
+            continue
+        epoch = int(m.group(1))
+        _, nid_interactions, _, _ = load_model_and_interactions(
+            epoch_file, dropout=experiment_settings["dropout"]
+        )
+        if nid_interactions is None:
+            continue
+        scores, labels = compute_auroc_data(gt, nid_interactions)
+        metrics = compute_metrics(scores, labels)
+        trajectory.append({"epoch": epoch, "auroc": metrics["auroc"]})
+    
+    return trajectory
+
+
+def analyze_all_trajectories(snapshot_root="snapshots", output_dir="results"):
+    """Loop over all functions and experiments and save trajectory CSVs."""
+    output_path = Path(output_dir) / "trajectories"
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    for function in functions:
+        for experiment in EXPERIMENTS:
+            trajectory = analyze_trajectory(function, experiment, snapshot_root)
+            if not trajectory:
+                continue
+            df = pd.DataFrame(trajectory)
+            df["function"] = function.__name__
+            df["experiment"] = experiment["name"]
+            df["noise"] = experiment["noise"]
+            df["optimizer"] = experiment["optimizer"]
+            df["dropout"] = experiment["dropout"]
+            df["weight_decay"] = experiment["weight_decay"]
+            fname = f"{function.__name__}_{experiment['name']}_trajectory.csv"
+            df.to_csv(output_path / fname, index=False)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze snapshots and compute interaction metrics")
     parser.add_argument("--snapshot-root", default="snapshots", help="Root folder for snapshots")
