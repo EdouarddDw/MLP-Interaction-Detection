@@ -5,6 +5,13 @@ import torch.nn as nn
 from pathlib import Path
 from torch.utils.data import TensorDataset, DataLoader, random_split
 
+import argparse
+import sys
+import datetime
+import uuid
+import platform
+import subprocess
+
 from multilayer_perceptron import MLP
 from synth import get_data, functions
 from config import EXPERIMENTS
@@ -71,6 +78,9 @@ def train(
     function_name="unknown_function",
     experiment_name="unknown_experiment",
     experiment_settings=None,
+    run_id=None,
+    num_samples=None,
+    hidden_units=None,
     device=device,
 ):
     if criterion is None:
@@ -95,9 +105,41 @@ def train(
     best_epoch = None
     best_snapshot = None
 
-    snapshot_dir = Path(snapshot_root) / function_name / experiment_name
+    if run_id:
+        snapshot_dir = Path(snapshot_root) / function_name / experiment_name / run_id
+    else:
+        snapshot_dir = Path(snapshot_root) / function_name / experiment_name
     if snapshots:
         snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        # try to collect git SHA for provenance
+        git_sha = None
+        try:
+            git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        except Exception:
+            git_sha = None
+
+        # write run_info.json with provenance for this run
+        run_info = {
+            "run_id": run_id,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "function": function_name,
+            "experiment": experiment_name,
+            "num_samples": num_samples,
+            "hidden_units": hidden_units,
+            "experiment_settings": experiment_settings or {},
+            "seed": set_seed,
+            "python_version": sys.version,
+            "platform": platform.platform(),
+            "git_sha": git_sha,
+            "cmdline": sys.argv,
+        }
+        try:
+            with (snapshot_dir / "run_info.json").open("w") as f:
+                json.dump(run_info, f, sort_keys=True, indent=2)
+        except Exception:
+            # non-fatal; continue without failing training if metadata cannot be written
+            pass
 
     metrics_file = snapshot_dir / "metrics.csv"
     experiment_settings = experiment_settings or {}
@@ -241,6 +283,44 @@ def make_data_loaders(function, num_samples, noise, seed, batch_size=64, val_rat
 def run_experiments():
     torch.manual_seed(set_seed)
 
+def _parse_hidden_units(hidden_units_str):
+    """
+    Parse hidden_units input accepting either "[64,64]" or "64,64" and
+    return a list of positive integers. Raise ValueError on invalid input.
+    """
+    if hidden_units_str is None:
+        return None
+    s = hidden_units_str.strip()
+    if s.startswith("[") and s.endswith("]"):
+        s = s[1:-1]
+    if s == "":
+        raise ValueError("empty hidden_units string")
+    parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+    if not parts:
+        raise ValueError("no hidden unit values found")
+    units = []
+    for p in parts:
+        try:
+            v = int(p)
+        except Exception:
+            raise ValueError(f"invalid integer in hidden_units: '{p}'")
+        if v <= 0:
+            raise ValueError("hidden unit sizes must be positive integers")
+        units.append(v)
+    return units
+
+
+def run_experiments(num_samples=30000, hidden_units=None, run_id=None):
+    torch.manual_seed(set_seed)
+
+    # create a run id (timestamp + short uuid) if not provided
+    if run_id is None:
+        run_id = datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex[:8]
+
+    # If caller didn't provide hidden_units, use base defaults
+    if hidden_units is None:
+        hidden_units = base_parameters.get("hidden_units", [64, 64])
+
     for f in functions:
         for e in EXPERIMENTS:
             function_name = f.__name__
@@ -249,7 +329,7 @@ def run_experiments():
 
             data_loaders, gt = make_data_loaders(
                 function=f,
-                num_samples=30000,
+                num_samples=num_samples,
                 noise=e["noise"],
                 seed=set_seed,
                 batch_size=64,
@@ -258,6 +338,7 @@ def run_experiments():
 
             model_parameters = {
                 **base_parameters,
+                "hidden_units": hidden_units,
                 "dropout": e.get("dropout", dropout_rate),
             }
 
@@ -273,6 +354,9 @@ def run_experiments():
                 snap_every=1,
                 function_name=function_name,
                 experiment_name=experiment_name,
+                run_id=run_id,
+                num_samples=num_samples,
+                hidden_units=hidden_units,
                 experiment_settings={
                     **base_parameters,
                     **e,
@@ -282,4 +366,26 @@ def run_experiments():
 
 
 if __name__ == "__main__":
-    run_experiments()
+    parser = argparse.ArgumentParser(description="Run training experiments")
+    parser.add_argument(
+        "--num_samples",
+        type=int,
+        default=30000,
+        help="Number of samples to generate for training and evaluation (default: 30000)",
+    )
+    parser.add_argument(
+        "--hidden_units",
+        type=str,
+        default=None,
+        help="Hidden layer sizes as comma-separated ints or bracketed list, e.g. '64,64' or '[64,64]'",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        parsed_hidden = _parse_hidden_units(args.hidden_units)
+    except ValueError as exc:
+        print(f"Error parsing --hidden_units: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    run_experiments(num_samples=args.num_samples, hidden_units=parsed_hidden)
