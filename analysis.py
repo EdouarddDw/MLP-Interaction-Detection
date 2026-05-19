@@ -10,7 +10,7 @@ from multilayer_perceptron import MLP, get_weights
 from synth import functions
 from train import make_data_loaders
 from config import EXPERIMENTS
-
+## add missing interactions to NID subset 
 
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
