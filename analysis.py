@@ -3,6 +3,10 @@ import json
 import torch
 import numpy as np
 import pandas as pd
+import os
+import re
+import argparse
+from typing import Optional, List, Tuple
 from pathlib import Path
 
 from NID import get_interactions
@@ -38,13 +42,27 @@ def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
     
     checkpoint = torch.load(snapshot_path, map_location=device)
     
-    # Reconstruct model with correct dropout value to match training
+    # Infer hidden_units from run_info.json if available (next to checkpoint in same dir)
+    snapshot_dir = Path(snapshot_path).parent
+    run_info_path = snapshot_dir / "run_info.json"
+    hidden_units = [64, 64]  # fallback default
+    
+    if run_info_path.exists():
+        try:
+            with open(run_info_path) as f:
+                run_info = json.load(f)
+                if "hidden_units" in run_info:
+                    hidden_units = run_info["hidden_units"]
+        except Exception:
+            pass  # Use fallback
+    
+    # Reconstruct model with correct architecture and dropout
     model = MLP(
         num_features=num_features,
-        hidden_units=[64, 64],
+        hidden_units=hidden_units,
         use_main_effect_nets=False,
         main_effect_net_units=[10, 10, 10],
-        dropout=dropout,  # Use the dropout from experiment settings
+        dropout=dropout,
     ).to(device)
     
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -76,6 +94,34 @@ def get_ground_truth_interactions(function, num_samples=30000, noise=0.0, seed=4
     _, _, gt_interactions = function(num_samples=num_samples, seed=seed)
     # Convert list of sets to set of frozensets for hashability
     return set(frozenset(inter) for inter in gt_interactions)
+
+
+def _get_best_snapshot_in_dir(candidate_dir: Path) -> Optional[Path]:
+    """Return the best_epoch_*.pt file with the highest epoch number in candidate_dir, or None."""
+    if not candidate_dir.exists() or not candidate_dir.is_dir():
+        return None
+    snaps = list(candidate_dir.glob("best_epoch_*.pt"))
+    if not snaps:
+        return None
+    best = None
+    best_epoch = -1
+    for s in snaps:
+        m = re.search(r"best_epoch_(\d{4})\.pt$", s.name)
+        if m:
+            epoch = int(m.group(1))
+            if epoch > best_epoch:
+                best_epoch = epoch
+                best = s
+    return best
+
+
+def list_available_run_ids(snapshot_root: str, function_name: str, experiment_name: str) -> List[str]:
+    """List run_id subdirectories under a given experiment, if any."""
+    base = Path(snapshot_root) / function_name / experiment_name
+    if not base.exists():
+        return []
+    run_ids = [p.name for p in base.iterdir() if p.is_dir()]
+    return sorted(run_ids)
 
 
 def _is_numeric(value):
@@ -402,7 +448,7 @@ def compute_metrics(scores, labels):
     return metrics
 
 
-def analyze_single_experiment(function, experiment_settings, snapshot_root="snapshots", num_samples=30000, seed=42):
+def analyze_single_experiment(function, experiment_settings, snapshot_root="snapshots", num_samples=30000, seed=42, run_id: Optional[str] = None):
     """
     Analyze a single function/experiment combination.
     
@@ -461,21 +507,40 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
     }
     
     try:
-        # Find best epoch checkpoint
+        # Find best epoch checkpoint. Support optional run_id selection.
         snapshot_dir = Path(snapshot_root) / function_name / experiment_name
-        best_epoch_files = list(snapshot_dir.glob("best_epoch_*.pt"))
-        
-        if not best_epoch_files:
+
+        candidate_file = None
+
+        # 1) If explicit run_id passed (function arg), look there first
+        if run_id:
+            candidate_file = _get_best_snapshot_in_dir(snapshot_dir / run_id)
+
+        # 2) If not found, look directly under experiment dir
+        if candidate_file is None:
+            candidate_file = _get_best_snapshot_in_dir(snapshot_dir)
+
+        # 3) If still not found, scan run_id subdirectories and pick the most recently modified best snapshot
+        if candidate_file is None and snapshot_dir.exists():
+            candidates = []
+            for p in snapshot_dir.iterdir():
+                if p.is_dir():
+                    best_snap = _get_best_snapshot_in_dir(p)
+                    if best_snap is not None:
+                        candidates.append((best_snap.stat().st_mtime, best_snap))
+            if candidates:
+                candidates.sort(reverse=True)
+                candidate_file = candidates[0][1]
+
+        if candidate_file is None:
+            # No snapshot available for this experiment
             return result
-        
-        best_epoch_file = best_epoch_files[0]
-        
+
+        best_epoch_file = candidate_file
+
         # Load model and NID interactions with correct dropout setting
         dropout_value = experiment_settings.get("dropout", 0.0)
-        model, nid_interactions, val_loss, epoch = load_model_and_interactions(
-            best_epoch_file, 
-            dropout=dropout_value
-        )
+        model, nid_interactions, val_loss, epoch = load_model_and_interactions(best_epoch_file, dropout=dropout_value)
         
         if model is None or nid_interactions is None:
             return result
@@ -527,7 +592,7 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
     return result
 
 
-def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=42, output_dir="results"):
+def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=42, output_dir="results", run_id: Optional[str] = None):
     """
     Analyze all function/experiment combinations.
     
@@ -556,12 +621,16 @@ def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=4
         print(f"Analyzing {function_name}...")
         
         for experiment in EXPERIMENTS:
+            # Allow global run_id override or per-experiment run_id in EXPERIMENTS dict
+            chosen_run_id = run_id if run_id is not None else (experiment.get("run_id") if isinstance(experiment, dict) else None)
+
             result = analyze_single_experiment(
                 function=function,
                 experiment_settings=experiment,
                 snapshot_root=snapshot_root,
                 num_samples=num_samples,
                 seed=seed,
+                run_id=chosen_run_id,
             )
             function_results.append(result)
             
@@ -627,11 +696,21 @@ def print_summary(all_results):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Analyze snapshots and compute interaction metrics")
+    parser.add_argument("--snapshot-root", default="snapshots", help="Root folder for snapshots")
+    parser.add_argument("--num-samples", type=int, default=30000, help="Number of samples for GT generation")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--output-dir", default="results", help="Directory to write results CSVs")
+    parser.add_argument("--run-id", default=None, help="Optional run_id to select snapshots under each experiment")
+
+    args = parser.parse_args()
+
     all_results = analyze_all_experiments(
-        snapshot_root="snapshots",
-        num_samples=30000,
-        seed=42,
-        output_dir="results",
+        snapshot_root=args.snapshot_root,
+        num_samples=args.num_samples,
+        seed=args.seed,
+        output_dir=args.output_dir,
+        run_id=args.run_id,
     )
-    
+
     print_summary(all_results)
