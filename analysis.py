@@ -764,5 +764,9 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         run_id=args.run_id,
     )
+    analyze_all_trajectories(
+        snapshot_root=args.snapshot_root,
+        output_dir="results"
+    )
 
     print_summary(all_results)
