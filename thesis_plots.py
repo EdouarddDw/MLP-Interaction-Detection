@@ -15,12 +15,14 @@ The inputs are expected to already come from `best_epoch_*.pt` analyses.
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 from typing import Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 
 NOISE_ORDER = [0.0, 0.1, 0.2, 0.5, 1.0]
@@ -163,7 +165,7 @@ def _save_pgf(fig, output_path: Path) -> None:
     png_path = output_path.with_suffix(".png")
     _ensure_parent(pgf_path)
     fig.savefig(pgf_path, bbox_inches="tight", pad_inches=0.02)
-    fig.savefig(png_path, dpi=200, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(png_path, bbox_inches="tight", pad_inches=0.02)
 
 
 def _setup_thesis_style() -> None:
@@ -175,6 +177,7 @@ def _setup_thesis_style() -> None:
         plt.style.use(["science", "ieee"])
     except Exception:
         # Fallback to seaborn whitegrid when SciencePlots isn't available
+        warnings.warn("SciencePlots not available; falling back to seaborn-v0_8-whitegrid")
         plt.style.use("seaborn-v0_8-whitegrid")
 
     plt.rcParams.update(
@@ -208,7 +211,6 @@ def _plot_grouped_bars(
         return
 
     _ensure_parent(output_path)
-    _setup_thesis_style()
 
     if x_order is None:
         x_values = list(summary[x_col].dropna().unique())
@@ -222,7 +224,7 @@ def _plot_grouped_bars(
     x_positions = np.arange(len(x_values))
     bar_width = 0.35 if len(group_values) == 2 else 0.8 / max(len(group_values), 1)
 
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
     colors = {"small": "#2A6F97", "big": "#E76F51"}
 
     for index, group_value in enumerate(group_values):
@@ -270,9 +272,8 @@ def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
         return
 
     _ensure_parent(output_path)
-    _setup_thesis_style()
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(7.0, 3.5))
 
     y_positions = np.arange(len(summary))[::-1]
     small = summary["small_mean"].to_numpy(dtype=float)
@@ -305,8 +306,15 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
     if plot_df.empty:
         return
 
+    # Aggregate to one point per (function_name, model_size) pair
+    agg_df = (
+        plot_df.groupby(["function_name", "model_size"], as_index=False)[["auroc", "val_loss"]]
+        .mean()
+    )
+    if agg_df.empty:
+        return
+
     _ensure_parent(output_path)
-    _setup_thesis_style()
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
 
@@ -314,7 +322,7 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
     markers = {"small": "o",       "big": "^"}
 
     for model_size in MODEL_SIZE_ORDER:
-        subset = plot_df[plot_df["model_size"] == model_size]
+        subset = agg_df[agg_df["model_size"] == model_size]
         if subset.empty:
             continue
         ax.scatter(
@@ -328,20 +336,22 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
             edgecolors="none",
         )
 
-    x = plot_df["val_loss"].to_numpy(dtype=float)
-    y = plot_df["auroc"].to_numpy(dtype=float)
+    # Filter to positive val_loss to avoid log-scale issues
+    x_all = agg_df["val_loss"].to_numpy(dtype=float)
+    y_all = agg_df["auroc"].to_numpy(dtype=float)
+    valid_mask = x_all > 0
+    x = x_all[valid_mask]
+    y = y_all[valid_mask]
 
-    if len(x) >= 2 and np.std(x) > 0:
-        from scipy.stats import spearmanr
-
+    if len(x) >= 2 and np.std(np.log10(x)) > 0:
         rho, pval = spearmanr(x, y)
 
-        # Fit and draw trend line only within a sensible x range to avoid
-        # extrapolating into sparse outlier territory.
-        x_clip = np.clip(x, 0, np.percentile(x, 95))
-        slope, intercept = np.polyfit(x_clip, y, 1)
-        x_line = np.linspace(float(x_clip.min()), float(x_clip.max()), 200)
-        y_line = slope * x_line + intercept
+        # Fit on log10 space so trend line appears straight on log x-axis
+        x_log = np.log10(x)
+        slope, intercept = np.polyfit(x_log, y, 1)
+        # Evaluate on logspace
+        x_line = np.logspace(np.log10(x.min()), np.log10(x.max()), 200)
+        y_line = slope * np.log10(x_line) + intercept
         ax.plot(x_line, y_line, color="black", linewidth=1.0, linestyle="--", label="linear trend")
 
         p_str = f"{pval:.3f}" if pval >= 0.001 else "$p < 0.001$"
@@ -349,10 +359,11 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
     else:
         ax.set_title("AUROC vs Validation Loss")
 
+    ax.title.set_fontsize(9)
     ax.set_xscale("log")
     ax.set_xlabel("Validation loss (log scale)")
     ax.set_ylabel("AUROC")
-    ax.legend(loc="best")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
     fig.tight_layout()
     _save_pgf(fig, output_path)
     plt.close(fig)
@@ -390,6 +401,7 @@ def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
                 color = "white"
             else:
                 label = f"{value:.2f}"
+                # 0.55 is the luminance crossover point for cividis colormap
                 color = "white" if value < 0.55 else "black"
             ax.text(j, i, label, ha="center", va="center", fontsize=9, color=color)
 
@@ -401,6 +413,8 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
         raise ValueError("No best-epoch results found in the provided results directory")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Set up style once at the beginning for all plots
+    _setup_thesis_style()
 
     noise_summary = _function_level_summary(results_df, ["model_size", "noise"])
     _plot_grouped_bars(
@@ -454,12 +468,11 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
         big_matrix = _heatmap_matrix(big_df)
 
         fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
-        _setup_thesis_style()
         im = _plot_heatmap(axes[0], small_matrix, f"{function_name} - Small")
         _plot_heatmap(axes[1], big_matrix, f"{function_name} - Big")
         cbar = fig.colorbar(im, ax=axes, shrink=0.85, pad=0.02)
         cbar.set_label("Mean AUROC")
-        fig.suptitle(f"{function_name}: AUROC Heatmap by Noise and Regularisation", y=1.02)
+        fig.suptitle(f"{function_name}: AUROC Heatmap by Noise and Regularisation", y=0.98)
         _save_pgf(fig, heatmap_dir / f"{function_name}_heatmap_big_vs_small.pgf")
         plt.close(fig)
 
