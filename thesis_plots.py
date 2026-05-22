@@ -6,6 +6,7 @@ outputs, aggregates AUROC values across optimizers, and creates:
 - noise effect plots
 - regularisation effect plots
 - architecture comparison plots (big vs small)
+- AUROC vs validation loss scatter plot
 - per-function 5x4 heatmaps
 
 The inputs are expected to already come from `best_epoch_*.pt` analyses.
@@ -157,6 +158,14 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _save_pgf(fig, output_path: Path) -> None:
+    pgf_path = output_path.with_suffix(".pgf")
+    png_path = output_path.with_suffix(".png")
+    _ensure_parent(pgf_path)
+    fig.savefig(pgf_path, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(png_path, dpi=200, bbox_inches="tight", pad_inches=0.02)
+
+
 def _setup_thesis_style() -> None:
     # Prefer SciencePlots styles for academic-quality figures if available.
     try:
@@ -177,7 +186,11 @@ def _setup_thesis_style() -> None:
             "xtick.labelsize": 10,
             "ytick.labelsize": 10,
             "legend.fontsize": 10,
-            "font.family": "DejaVu Sans",
+            "font.family": "serif",
+            "font.serif": ["Computer Modern Roman", "Times New Roman", "DejaVu Serif"],
+            "text.usetex": False,
+            "pgf.rcfonts": False,
+            "pgf.texsystem": "pdflatex",
         }
     )
 
@@ -248,7 +261,7 @@ def _plot_grouped_bars(
     ax.grid(axis="y", alpha=0.25)
     ax.legend(frameon=False, ncol=2)
     fig.tight_layout()
-    fig.savefig(output_path, bbox_inches="tight")
+    _save_pgf(fig, output_path)
     plt.close(fig)
 
 
@@ -280,9 +293,69 @@ def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
     ax.grid(axis="x", alpha=0.25)
     ax.legend(frameon=False, loc="lower right")
     fig.tight_layout()
-    fig.savefig(output_path, bbox_inches="tight")
+    _save_pgf(fig, output_path)
     plt.close(fig)
 
+
+def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path) -> None:
+    if results_df.empty or "val_loss" not in results_df.columns:
+        return
+
+    plot_df = results_df.dropna(subset=["auroc", "val_loss"]).copy()
+    if plot_df.empty:
+        return
+
+    _ensure_parent(output_path)
+    _setup_thesis_style()
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+
+    colors  = {"small": "#2A6F97", "big": "#E76F51"}
+    markers = {"small": "o",       "big": "^"}
+
+    for model_size in MODEL_SIZE_ORDER:
+        subset = plot_df[plot_df["model_size"] == model_size]
+        if subset.empty:
+            continue
+        ax.scatter(
+            subset["val_loss"],
+            subset["auroc"],
+            s=16,
+            alpha=0.75,
+            color=colors[model_size],
+            marker=markers[model_size],
+            label=model_size,
+            edgecolors="none",
+        )
+
+    x = plot_df["val_loss"].to_numpy(dtype=float)
+    y = plot_df["auroc"].to_numpy(dtype=float)
+
+    if len(x) >= 2 and np.std(x) > 0:
+        from scipy.stats import spearmanr
+
+        rho, pval = spearmanr(x, y)
+
+        # Fit and draw trend line only within a sensible x range to avoid
+        # extrapolating into sparse outlier territory.
+        x_clip = np.clip(x, 0, np.percentile(x, 95))
+        slope, intercept = np.polyfit(x_clip, y, 1)
+        x_line = np.linspace(float(x_clip.min()), float(x_clip.max()), 200)
+        y_line = slope * x_line + intercept
+        ax.plot(x_line, y_line, color="black", linewidth=1.0, linestyle="--", label="linear trend")
+
+        p_str = f"{pval:.3f}" if pval >= 0.001 else "$p < 0.001$"
+        ax.set_title(rf"AUROC vs Validation Loss ($\rho$={rho:.2f}, {p_str})")
+    else:
+        ax.set_title("AUROC vs Validation Loss")
+
+    ax.set_xscale("log")
+    ax.set_xlabel("Validation loss (log scale)")
+    ax.set_ylabel("AUROC")
+    ax.legend(loc="best")
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
 
 def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -335,7 +408,7 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
         x_col="noise",
         x_order=NOISE_ORDER,
         title="Effect of Noise on Average AUROC",
-        output_path=output_dir / "noise_effect_by_model_size.png",
+        output_path=output_dir / "noise_effect_by_model_size.pgf",
     )
 
     reg_summary = _function_level_summary(results_df, ["model_size", "regularization_state"])
@@ -344,8 +417,10 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
         x_col="regularization_state",
         x_order=REGULARIZATION_ORDER,
         title="Effect of Regularisation on Average AUROC",
-        output_path=output_dir / "regularization_effect_by_model_size.png",
+        output_path=output_dir / "regularization_effect_by_model_size.pgf",
     )
+
+    _plot_auroc_vs_val_loss_scatter(results_df, output_dir / "auroc_vs_validation_loss.pgf")
 
     comparison_df = results_df[results_df["function_name"].isin(COMPARISON_FUNCTIONS)].copy()
     if not comparison_df.empty:
@@ -360,7 +435,7 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
             comparison_summary = comparison_summary.rename(columns={"small": "small_mean", "big": "big_mean"})
             comparison_summary["delta"] = comparison_summary["big_mean"] - comparison_summary["small_mean"]
             comparison_summary = comparison_summary.sort_values("delta", ascending=False).reset_index(drop=True)
-            _plot_dumbbell_comparison(comparison_summary, output_dir / "architecture_comparison_big_vs_small.png")
+            _plot_dumbbell_comparison(comparison_summary, output_dir / "architecture_comparison_big_vs_small.pgf")
 
     heatmap_dir = output_dir / "heatmaps"
     heatmap_dir.mkdir(parents=True, exist_ok=True)
@@ -385,7 +460,7 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
         cbar = fig.colorbar(im, ax=axes, shrink=0.85, pad=0.02)
         cbar.set_label("Mean AUROC")
         fig.suptitle(f"{function_name}: AUROC Heatmap by Noise and Regularisation", y=1.02)
-        fig.savefig(heatmap_dir / f"{function_name}_heatmap_big_vs_small.png", bbox_inches="tight")
+        _save_pgf(fig, heatmap_dir / f"{function_name}_heatmap_big_vs_small.pgf")
         plt.close(fig)
 
 

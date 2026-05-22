@@ -24,6 +24,13 @@ PLOTS_DIR = RESULTS_DIR / "plots"
 EPOCH_RESULTS_CSV = RESULTS_DIR / "auroc_by_epoch.csv"
 
 
+plt.rcParams["text.usetex"] = False
+plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.serif"] = ["Computer Modern Roman", "Times New Roman", "DejaVu Serif"]
+plt.rcParams["pgf.rcfonts"] = False
+plt.rcParams["pgf.texsystem"] = "pdflatex"
+
+
 def _sorted_epoch_checkpoints(snapshot_dir: Path) -> list[Path]:
     checkpoint_paths = list(snapshot_dir.glob("epoch_*.pt"))
 
@@ -206,7 +213,8 @@ def _plot_grouped_lines(
     ax.grid(True, alpha=0.25)
     ax.legend(frameon=False, ncol=2)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    pgf_path = output_path.with_suffix(".pgf")
+    fig.savefig(pgf_path, dpi=300, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
 
@@ -218,7 +226,7 @@ def generate_plots(results_df: pd.DataFrame, plots_dir: Path = PLOTS_DIR) -> Non
         function_summary,
         "function_name",
         "AUROC Through Epochs by Synthetic Function",
-        plots_dir / "auroc_by_function.png",
+        plots_dir / "auroc_by_function.pgf",
     )
 
     optimizer_summary = _summary_by_epoch(results_df, "optimizer")
@@ -226,7 +234,7 @@ def generate_plots(results_df: pd.DataFrame, plots_dir: Path = PLOTS_DIR) -> Non
         optimizer_summary,
         "optimizer",
         "AUROC Through Epochs by Optimizer",
-        plots_dir / "auroc_by_optimizer.png",
+        plots_dir / "auroc_by_optimizer.pgf",
     )
 
     noise_summary = _summary_by_epoch(results_df, "noise")
@@ -234,7 +242,7 @@ def generate_plots(results_df: pd.DataFrame, plots_dir: Path = PLOTS_DIR) -> Non
         noise_summary,
         "noise",
         "AUROC Through Epochs by Noise Level",
-        plots_dir / "auroc_by_noise.png",
+        plots_dir / "auroc_by_noise.pgf",
     )
 
     regularization_summary = _summary_by_epoch(results_df, "regularization_category")
@@ -242,7 +250,7 @@ def generate_plots(results_df: pd.DataFrame, plots_dir: Path = PLOTS_DIR) -> Non
         regularization_summary,
         "regularization_category",
         "AUROC Through Epochs by Regularization Technique",
-        plots_dir / "auroc_by_regularization.png",
+        plots_dir / "auroc_by_regularization.pgf",
     )
 
 
