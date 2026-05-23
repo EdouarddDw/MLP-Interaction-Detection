@@ -35,7 +35,7 @@ REGULARIZATION_ORDER = [
     "dropout+weight_decay",
 ]
 MODEL_SIZE_ORDER = ["small", "big"]
-COMPARISON_FUNCTIONS = [f"f{i}" for i in range(1, 10)]
+COMPARISON_FUNCTIONS = [f"f{i}" for i in range(1, 11)]
 
 
 def _regularization_state(dropout: float, weight_decay: bool) -> str:
@@ -588,6 +588,11 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
 
     _plot_auroc_by_interaction_order(results_df, output_dir / "auroc_by_interaction_order.pgf")
 
+    def _function_sort_key(name: str):
+        if str(name).startswith("f") and str(name)[1:].isdigit():
+            return int(str(name)[1:])
+        return str(name)
+
     comparison_df = results_df[results_df["function_name"].isin(COMPARISON_FUNCTIONS)].copy()
     if not comparison_df.empty:
         comparison_summary = (
@@ -600,16 +605,15 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
         if not comparison_summary.empty:
             comparison_summary = comparison_summary.rename(columns={"small": "small_mean", "big": "big_mean"})
             comparison_summary["delta"] = comparison_summary["big_mean"] - comparison_summary["small_mean"]
-            comparison_summary = comparison_summary.sort_values("delta", ascending=False).reset_index(drop=True)
+            comparison_summary = comparison_summary.sort_values(
+                "function_name",
+                key=lambda col: col.map(_function_sort_key),
+                ascending=True,
+            ).reset_index(drop=True)
             _plot_dumbbell_comparison(comparison_summary, output_dir / "architecture_comparison_big_vs_small.pgf")
 
     heatmap_dir = output_dir / "heatmaps"
     heatmap_dir.mkdir(parents=True, exist_ok=True)
-
-    def _function_sort_key(name: str):
-        if str(name).startswith("f") and str(name)[1:].isdigit():
-            return int(str(name)[1:])
-        return str(name)
 
     for function_name in sorted(results_df["function_name"].dropna().unique(), key=_function_sort_key):
         function_df = results_df[results_df["function_name"] == function_name]
