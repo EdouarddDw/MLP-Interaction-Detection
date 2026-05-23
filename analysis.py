@@ -1,5 +1,6 @@
 import csv
 import json
+import itertools
 import torch
 import numpy as np
 import pandas as pd
@@ -287,7 +288,7 @@ def match_interactions_one_to_one(gt_interactions, nid_interactions):
     }
 
 
-def compute_auroc_data(gt_interactions, nid_interactions):
+def compute_auroc_data(gt_interactions, nid_interactions, full_space: bool = False):
     """
     Create binary labels and scores for AUROC computation.
     
@@ -307,6 +308,31 @@ def compute_auroc_data(gt_interactions, nid_interactions):
         tuple: (scores, labels) - arrays suitable for sklearn.metrics.roc_auc_score
                Returns None, None if insufficient samples for AUROC
     """
+    if full_space:
+        scores = []
+        labels = []
+
+        gt_set = set(gt_interactions)
+        nid_score_map = {}
+        for nid_tuple, strength in nid_interactions:
+            nid_set = frozenset(i + 1 for i in nid_tuple)
+            if len(nid_set) < 2:
+                continue
+            current_strength = nid_score_map.get(nid_set)
+            if current_strength is None or strength > current_strength:
+                nid_score_map[nid_set] = float(strength)
+
+        for subset_size in range(2, 11):
+            for subset in itertools.combinations(range(1, 11), subset_size):
+                subset_set = frozenset(subset)
+                labels.append(1 if subset_set in gt_set else 0)
+                scores.append(nid_score_map.get(subset_set, 0.0))
+
+        if len(labels) < 2:
+            return None, None
+
+        return np.array(scores), np.array(labels)
+
     scores = []
     labels = []
     
@@ -448,7 +474,7 @@ def compute_metrics(scores, labels):
     return metrics
 
 
-def analyze_single_experiment(function, experiment_settings, snapshot_root="snapshots", num_samples=30000, seed=42, run_id: Optional[str] = None):
+def analyze_single_experiment(function, experiment_settings, snapshot_root="snapshots", num_samples=30000, seed=42, run_id: Optional[str] = None, full_space: bool = False):
     """
     Analyze a single function/experiment combination.
     
@@ -505,6 +531,12 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
         "val_loss": float("inf"),
         "success": False,
     }
+    if full_space:
+        result.update({
+            "auroc_full": None,
+            "precision_full": None,
+            "recall_full": None,
+        })
     
     try:
         # Find best epoch checkpoint. Support optional run_id selection.
@@ -553,8 +585,11 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
         
         # Compute AUROC data
         scores, labels = compute_auroc_data(gt_interactions, nid_interactions)
-        
-        if scores is None:
+        full_scores = full_labels = None
+        if full_space:
+            full_scores, full_labels = compute_auroc_data(gt_interactions, nid_interactions, full_space=True)
+
+        if scores is None and not full_space:
             # Not enough samples
             result["num_exact_matched"] = matching["num_exact_matched"]
             result["num_superset_matched_unique"] = matching["num_superset_matched_unique"]
@@ -568,7 +603,10 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
             return result
         
         # Compute metrics
-        metrics = compute_metrics(scores, labels)
+        metrics = compute_metrics(scores, labels) if scores is not None else {"auroc": None, "precision": None, "recall": None}
+        full_metrics = None
+        if full_space:
+            full_metrics = compute_metrics(full_scores, full_labels) if full_scores is not None else {"auroc": None, "precision": None, "recall": None}
         
         result.update({
             "auroc": metrics["auroc"],
@@ -584,6 +622,13 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
             "val_loss": val_loss,
             "success": True,
         })
+
+        if full_space and full_metrics is not None:
+            result.update({
+                "auroc_full": full_metrics["auroc"],
+                "precision_full": full_metrics["precision"],
+                "recall_full": full_metrics["recall"],
+            })
     
     except Exception as e:
         print(f"Error analyzing {function_name}/{experiment_name}: {e}")
@@ -592,7 +637,7 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
     return result
 
 
-def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=42, output_dir="results", run_id: Optional[str] = None):
+def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=42, output_dir="results", run_id: Optional[str] = None, full_space: bool = False):
     """
     Analyze all function/experiment combinations.
     
@@ -631,6 +676,7 @@ def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=4
                 num_samples=num_samples,
                 seed=seed,
                 run_id=chosen_run_id,
+                full_space=full_space,
             )
             function_results.append(result)
             
@@ -666,21 +712,38 @@ def print_summary(all_results):
     print(f"Successful analyses: {successful} ({100*successful/total_experiments:.1f}%)")
     print()
     
-    # Compute aggregate statistics
-    all_aurocs = []
-    for results in all_results.values():
-        for r in results:
-            if r["auroc"] is not None:
-                all_aurocs.append(r["auroc"])
-    
-    if all_aurocs:
-        print(f"AUROC Statistics:")
-        print(f"  Mean:     {np.mean(all_aurocs):.4f}")
-        print(f"  Median:   {np.median(all_aurocs):.4f}")
-        print(f"  Std:      {np.std(all_aurocs):.4f}")
-        print(f"  Min:      {np.min(all_aurocs):.4f}")
-        print(f"  Max:      {np.max(all_aurocs):.4f}")
+    def _collect_metric(metric_name):
+        values = []
+        for results in all_results.values():
+            for r in results:
+                value = r.get(metric_name)
+                if value is not None:
+                    values.append(value)
+        return values
+
+    def _print_metric_stats(title, values):
+        if not values:
+            return
+        print(f"{title}:")
+        print(f"  Mean:     {np.mean(values):.4f}")
+        print(f"  Median:   {np.median(values):.4f}")
+        print(f"  Std:      {np.std(values):.4f}")
+        print(f"  Min:      {np.min(values):.4f}")
+        print(f"  Max:      {np.max(values):.4f}")
         print()
+
+    # Compute aggregate statistics
+    all_aurocs = _collect_metric("auroc")
+    _print_metric_stats("AUROC Statistics", all_aurocs)
+
+    full_aurocs = _collect_metric("auroc_full")
+    full_precisions = _collect_metric("precision_full")
+    full_recalls = _collect_metric("recall_full")
+    if full_aurocs or full_precisions or full_recalls:
+        print("FULL-SPACE STATISTICS")
+        _print_metric_stats("AUROC Full-Space Statistics", full_aurocs)
+        _print_metric_stats("Precision Full-Space Statistics", full_precisions)
+        _print_metric_stats("Recall Full-Space Statistics", full_recalls)
     
     # Print top performers
     print("Top 10 AUROC performances:")
@@ -754,6 +817,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--output-dir", default="results", help="Directory to write results CSVs")
     parser.add_argument("--run-id", default=None, help="Optional run_id to select snapshots under each experiment")
+    parser.add_argument("--full-space", action="store_true", help="Evaluate AUROC over the full interaction space")
 
     args = parser.parse_args()
 
@@ -763,6 +827,7 @@ if __name__ == "__main__":
         seed=args.seed,
         output_dir=args.output_dir,
         run_id=args.run_id,
+        full_space=args.full_space,
     )
     analyze_all_trajectories(
         snapshot_root=args.snapshot_root,
