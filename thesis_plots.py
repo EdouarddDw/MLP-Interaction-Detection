@@ -24,6 +24,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from synth import functions as synth_functions
+
 
 NOISE_ORDER = [0.0, 0.1, 0.2, 0.5, 1.0]
 REGULARIZATION_ORDER = [
@@ -58,6 +60,43 @@ def _pretty_regularization_label(state: str) -> str:
 
 def _pretty_noise_label(noise: float) -> str:
     return f"{noise:g}"
+
+
+def _get_interaction_order(function_name: str) -> int:
+    """
+    Get the maximum interaction order for a given function.
+    
+    The interaction order is the size of the largest interaction in the function's
+    ground truth interaction set.
+    
+    Args:
+        function_name: Name like "f1", "f2", etc.
+    
+    Returns:
+        int: Maximum interaction order (number of features in largest interaction)
+    """
+    # Find the function object by name
+    func = None
+    for f in synth_functions:
+        if f.__name__ == function_name:
+            func = f
+            break
+    
+    if func is None:
+        # Fallback if function not found
+        return 2
+    
+    # Call function to get ground truth interactions
+    try:
+        _, _, gt_interactions = func(num_samples=1000, seed=42)
+        if not gt_interactions:
+            return 2
+        # Find maximum size of interactions
+        max_order = max(len(interaction) for interaction in gt_interactions)
+        return max_order
+    except Exception:
+        # Fallback on any error
+        return 2
 
 
 def _read_analysis_csvs(folder: Path, model_size: str) -> list[pd.DataFrame]:
@@ -224,7 +263,7 @@ def _plot_grouped_bars(
     x_positions = np.arange(len(x_values))
     bar_width = 0.35 if len(group_values) == 2 else 0.8 / max(len(group_values), 1)
 
-    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+    fig, ax = plt.subplots(figsize=(7.5, 3.5))
     colors = {"small": "#2A6F97", "big": "#E76F51"}
 
     for index, group_value in enumerate(group_values):
@@ -256,12 +295,19 @@ def _plot_grouped_bars(
         )
 
     ax.set_title(title)
-    ax.set_ylabel(ylabel)
+    ax.title.set_fontsize(10)
+    ax.set_ylabel("Average AUROC (±1 SD across functions)")
     ax.set_xticks(x_positions)
-    ax.set_xticklabels([str(v) for v in x_values])
+    ax.set_xticklabels([
+        _pretty_regularization_label(str(v)) if x_col == "regularization_state"
+        else _pretty_noise_label(v) if x_col == "noise"
+        else str(v)
+        for v in x_values
+    ], rotation=15, ha="right")
     ax.set_ylim(0.0, 1.0)
-    ax.grid(axis="y", alpha=0.25)
-    ax.legend(frameon=False, ncol=2)
+    ax.yaxis.grid(True)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
     fig.tight_layout()
     _save_pgf(fig, output_path)
     plt.close(fig)
@@ -368,6 +414,110 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
     _save_pgf(fig, output_path)
     plt.close(fig)
 
+
+def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path) -> None:
+    """
+    Plot AUROC grouped by interaction order and regularization state.
+    
+    Derives interaction order for each function from ground truth, then aggregates
+    using the two-stage summary pattern (within function, then across functions).
+    """
+    if results_df.empty or "function_name" not in results_df.columns:
+        return
+    
+    plot_df = results_df.copy()
+    
+    # Add interaction_order column by mapping each function to its max interaction order
+    plot_df["interaction_order"] = plot_df["function_name"].map(
+        lambda fn: _get_interaction_order(fn)
+    )
+    
+    # Filter out any rows where function_name is NaN or interaction_order is NaN
+    plot_df = plot_df.dropna(subset=["function_name", "interaction_order"])
+    
+    if plot_df.empty:
+        return
+    
+    # Aggregate using two-stage pattern: within function, then across functions
+    interaction_summary = _function_level_summary(
+        plot_df, ["model_size", "interaction_order", "regularization_state"]
+    )
+    
+    if interaction_summary.empty:
+        return
+    
+    # Now aggregate across model_size to get interaction_order × regularization_state
+    final_summary = (
+        interaction_summary.groupby(["interaction_order", "regularization_state"], as_index=False)
+        .agg({"mean": "mean", "std": "mean", "count": "sum"})
+        .reset_index(drop=True)
+    )
+    
+    _ensure_parent(output_path)
+    
+    fig, ax = plt.subplots(figsize=(7.5, 3.5))
+    
+    # Get unique interaction orders in sorted order
+    interaction_orders = sorted(final_summary["interaction_order"].dropna().unique())
+    reg_states = sorted(final_summary["regularization_state"].dropna().unique())
+    
+    if not interaction_orders or not reg_states:
+        plt.close(fig)
+        return
+    
+    x_positions = np.arange(len(interaction_orders))
+    bar_width = 0.35 if len(reg_states) == 2 else 0.8 / max(len(reg_states), 1)
+    
+    colors = {
+        "base": "#1f77b4",
+        "dropout": "#ff7f0e",
+        "weight_decay": "#2ca02c",
+        "dropout+weight_decay": "#d62728",
+    }
+    
+    for index, reg_state in enumerate(reg_states):
+        state_df = final_summary[final_summary["regularization_state"] == reg_state].copy()
+        means = []
+        errors = []
+        for order in interaction_orders:
+            match = state_df[state_df["interaction_order"] == order]
+            if match.empty:
+                means.append(np.nan)
+                errors.append(np.nan)
+            else:
+                means.append(float(match.iloc[0]["mean"]))
+                errors.append(float(match.iloc[0]["std"]))
+        
+        offset = (index - (len(reg_states) - 1) / 2) * bar_width
+        positions = x_positions + offset
+        ax.bar(
+            positions,
+            means,
+            width=bar_width * 0.92,
+            yerr=errors,
+            capsize=4,
+            color=colors.get(reg_state, None),
+            label=_pretty_regularization_label(reg_state),
+            alpha=0.9,
+            edgecolor="white",
+            linewidth=0.8,
+        )
+    
+    ax.set_title("Effect of Interaction Order on Average AUROC")
+    ax.title.set_fontsize(10)
+    ax.set_ylabel("Average AUROC (±1 SD across functions)")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([f"{int(order)}" for order in interaction_orders], rotation=0)
+    ax.set_xlabel("Maximum Interaction Order")
+    ax.set_ylim(0.0, 1.0)
+    ax.yaxis.grid(True)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
 def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(index=NOISE_ORDER, columns=REGULARIZATION_ORDER, dtype=float)
@@ -435,6 +585,8 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
     )
 
     _plot_auroc_vs_val_loss_scatter(results_df, output_dir / "auroc_vs_validation_loss.pgf")
+
+    _plot_auroc_by_interaction_order(results_df, output_dir / "auroc_by_interaction_order.pgf")
 
     comparison_df = results_df[results_df["function_name"].isin(COMPARISON_FUNCTIONS)].copy()
     if not comparison_df.empty:
