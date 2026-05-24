@@ -924,7 +924,139 @@ def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
     return im
 
 
-def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectories_dir: Path) -> None:
+def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) -> None:
+    if not epoch_results_path.exists():
+        warnings.warn(f"Epoch results file not found: {epoch_results_path}")
+        return
+
+    df = pd.read_csv(epoch_results_path)
+    if df.empty:
+        warnings.warn(f"Epoch results file is empty: {epoch_results_path}")
+        return
+
+    required_cols = {"epoch", "auroc", "val_loss", "function_name", "noise", "dropout", "weight_decay"}
+    if not required_cols.issubset(df.columns):
+        warnings.warn(f"Missing columns in epoch results: {required_cols - set(df.columns)}")
+        return
+
+    df = df.copy()
+    df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce")
+    df["auroc"] = pd.to_numeric(df["auroc"], errors="coerce")
+    df["val_loss"] = pd.to_numeric(df["val_loss"], errors="coerce")
+    df["noise"] = pd.to_numeric(df["noise"], errors="coerce")
+    df["dropout"] = pd.to_numeric(df["dropout"], errors="coerce")
+    df["weight_decay"] = df["weight_decay"].astype(str).str.lower().isin(["true", "1", "yes"])
+    df["regularization_state"] = [
+        _regularization_state(d, w) for d, w in zip(df["dropout"], df["weight_decay"])
+    ]
+
+    df = df[df["regularization_state"] == "base"].copy()
+    df = df[df["noise"].isin([0.0, 1.0])].copy()
+    df = df.dropna(subset=["epoch", "auroc", "val_loss", "function_name"])
+
+    if df.empty:
+        warnings.warn("No data after filtering for noise=0/1 and base regularization.")
+        return
+
+    color_loss = "#E76F51"
+    color_auroc = "#2A6F97"
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, 3.0))
+
+    # Proxy artists for shared legend — empty so invisible in the plot itself
+    loss_handle, = axes[0].plot([], [], color=color_loss, linewidth=1.6, label="Validation loss")
+    auroc_handle, = axes[0].plot([], [], color=color_auroc, linewidth=1.6, label="AUROC")
+
+    for ax, noise_val in zip(axes, [0.0, 1.0]):
+        ax.set_title(f"Noise = {_pretty_noise_label(noise_val)}")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Validation loss", color=color_loss)
+        ax.tick_params(axis="y", labelcolor=color_loss)
+
+        noise_df = df[df["noise"] == noise_val].copy()
+        if noise_df.empty:
+            continue
+
+        # Stage 1: average within (function_name, epoch) across experiments/optimisers
+        func_epoch = (
+            noise_df.groupby(["function_name", "epoch"], as_index=False)[["auroc", "val_loss"]]
+            .mean()
+        )
+
+        # Keep only epochs where at least 3 distinct functions have valid data
+        func_count = func_epoch.groupby("epoch")["function_name"].nunique()
+        valid_epochs = func_count[func_count >= 3].index
+        func_epoch = func_epoch[func_epoch["epoch"].isin(valid_epochs)].copy()
+        if func_epoch.empty:
+            continue
+
+        # Stage 2: aggregate across functions per epoch
+        auroc_agg = func_epoch.groupby("epoch")["auroc"].agg(mean="mean", std="std")
+        loss_agg = func_epoch.groupby("epoch")["val_loss"].agg(mean="mean", std="std")
+        epoch_stats = pd.DataFrame({
+            "auroc_mean": auroc_agg["mean"],
+            "auroc_std": auroc_agg["std"].fillna(0.0),
+            "loss_mean": loss_agg["mean"],
+            "loss_std": loss_agg["std"].fillna(0.0),
+        }).reset_index().sort_values("epoch")
+
+        x = epoch_stats["epoch"].to_numpy(dtype=float)
+        auroc_mean = epoch_stats["auroc_mean"].to_numpy(dtype=float)
+        auroc_std = epoch_stats["auroc_std"].to_numpy(dtype=float)
+        loss_mean = epoch_stats["loss_mean"].to_numpy(dtype=float)
+        loss_std = epoch_stats["loss_std"].to_numpy(dtype=float)
+
+        # Find first epoch where AUROC reaches 95 % of its series maximum
+        plateau_epoch = None
+        valid_auroc = auroc_mean[~np.isnan(auroc_mean)]
+        if len(valid_auroc) > 0:
+            threshold = 0.95 * np.max(valid_auroc)
+            plateau_mask = auroc_mean >= threshold
+            if plateau_mask.any():
+                plateau_epoch = x[plateau_mask][0]
+
+        # Left axis: validation loss
+        ax.plot(x, loss_mean, color=color_loss, linewidth=1.6)
+        ax.fill_between(x, loss_mean - loss_std, loss_mean + loss_std,
+                        color=color_loss, alpha=0.15, linewidth=0)
+
+        # Right axis: AUROC (twin)
+        ax2 = ax.twinx()
+        ax2.plot(x, auroc_mean, color=color_auroc, linewidth=1.6)
+        ax2.fill_between(x, auroc_mean - auroc_std, auroc_mean + auroc_std,
+                         color=color_auroc, alpha=0.15, linewidth=0)
+        ax2.set_ylabel("AUROC", color=color_auroc)
+        ax2.tick_params(axis="y", labelcolor=color_auroc)
+        ax2.set_ylim(0.0, 1.0)
+
+        if plateau_epoch is not None:
+            ax.axvline(plateau_epoch, color="gray", linestyle="--", linewidth=1.0)
+            ax.text(
+                plateau_epoch,
+                0.97,
+                "AUROC plateau",
+                transform=ax.get_xaxis_transform(),
+                ha="right",
+                va="top",
+                fontsize=7,
+                color="gray",
+                rotation=90,
+            )
+
+    fig.legend(
+        handles=[loss_handle, auroc_handle],
+        loc="lower center",
+        ncol=2,
+        frameon=False,
+        bbox_to_anchor=(0.5, -0.05),
+        fontsize=9,
+    )
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
+def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectories_dir: Path, results_root: Path) -> None:
     if results_df.empty:
         raise ValueError("No best-epoch results found in the provided results directory")
 
@@ -962,6 +1094,11 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     peak_summary_df = compute_peak_auroc_epoch_summary(trajectories_dir)
     _plot_peak_epoch_vs_noise(peak_summary_df, output_dir / "peak_epoch_vs_noise.pgf")
     generate_peak_epoch_table(peak_summary_df, output_dir / "peak_epoch_table.tex")
+
+    _plot_loss_vs_auroc_divergence(
+        epoch_results_path=results_root / "auroc_by_epoch.csv",
+        output_path=output_dir / "loss_vs_auroc_divergence.pgf",
+    )
 
     def _function_sort_key(name: str):
         if str(name).startswith("f") and str(name)[1:].isdigit():
@@ -1023,7 +1160,7 @@ def main() -> None:
     if results_df.empty:
         raise SystemExit(f"No best-epoch analysis CSVs found under {results_root}")
 
-    generate_thesis_plots(results_df, output_dir, trajectories_dir)
+    generate_thesis_plots(results_df, output_dir, trajectories_dir, results_root)
     print(f"Saved thesis plots to {output_dir}")
 
 
