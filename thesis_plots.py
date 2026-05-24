@@ -518,6 +518,166 @@ def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path
     plt.close(fig)
 
 
+def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path: Path) -> None:
+    if not trajectories_dir.exists() or not trajectories_dir.is_dir():
+        return
+
+    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv"))
+    if not trajectory_files:
+        return
+
+    frames: list[pd.DataFrame] = []
+    for path in trajectory_files:
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        if "function_name" not in frame.columns and "function" in frame.columns:
+            frame = frame.rename(columns={"function": "function_name"})
+        if "experiment_name" not in frame.columns and "experiment" in frame.columns:
+            frame = frame.rename(columns={"experiment": "experiment_name"})
+        frames.append(frame)
+
+    if not frames:
+        return
+
+    plot_df = pd.concat(frames, ignore_index=True)
+    if plot_df.empty:
+        return
+
+    required_columns = {"epoch", "auroc", "function_name", "noise", "dropout", "weight_decay"}
+    if not required_columns.issubset(plot_df.columns):
+        return
+
+    plot_df = plot_df.copy()
+    plot_df["epoch"] = pd.to_numeric(plot_df["epoch"], errors="coerce")
+    plot_df["auroc"] = pd.to_numeric(plot_df["auroc"], errors="coerce")
+    plot_df["noise"] = pd.to_numeric(plot_df["noise"], errors="coerce")
+    plot_df["dropout"] = pd.to_numeric(plot_df["dropout"], errors="coerce")
+    plot_df["weight_decay"] = plot_df["weight_decay"].astype(bool)
+    plot_df = plot_df.dropna(subset=["epoch", "auroc", "function_name", "noise", "dropout"])
+
+    plot_df["regularization_state"] = [
+        _regularization_state(dropout, weight_decay)
+        for dropout, weight_decay in zip(plot_df["dropout"], plot_df["weight_decay"])
+    ]
+    plot_df = plot_df[plot_df["regularization_state"].isin(REGULARIZATION_ORDER)].copy()
+
+    if plot_df.empty:
+        return
+
+    def _function_sort_key(name: str):
+        if str(name).startswith("f") and str(name)[1:].isdigit():
+            return int(str(name)[1:])
+        return str(name)
+
+    _ensure_parent(output_path)
+
+    fig, axes = plt.subplots(
+        len(NOISE_ORDER),
+        len(REGULARIZATION_ORDER),
+        figsize=(10, 7),
+        sharex=True,
+        sharey=True,
+    )
+
+    if len(NOISE_ORDER) == 1 and len(REGULARIZATION_ORDER) == 1:
+        axes = np.array([[axes]])
+    elif len(NOISE_ORDER) == 1:
+        axes = np.array([axes])
+    elif len(REGULARIZATION_ORDER) == 1:
+        axes = np.array([[ax] for ax in axes])
+
+    all_epochs = np.sort(plot_df["epoch"].dropna().unique())
+    if all_epochs.size == 0:
+        plt.close(fig)
+        return
+
+    for row_index, noise_value in enumerate(NOISE_ORDER):
+        for col_index, reg_state in enumerate(REGULARIZATION_ORDER):
+            ax = axes[row_index, col_index]
+            cell_df = plot_df[
+                (plot_df["noise"] == noise_value)
+                & (plot_df["regularization_state"] == reg_state)
+            ].copy()
+
+            if not cell_df.empty:
+                function_epoch = (
+                    cell_df.groupby(["function_name", "epoch"], as_index=False)["auroc"]
+                    .mean()
+                )
+                if not function_epoch.empty:
+                    function_names = sorted(function_epoch["function_name"].dropna().unique(), key=_function_sort_key)
+                    pivot = (
+                        function_epoch.pivot(index="epoch", columns="function_name", values="auroc")
+                        .reindex(all_epochs)
+                    )
+
+                    for function_name in function_names:
+                        if function_name not in pivot.columns:
+                            continue
+                        ax.plot(
+                            pivot.index,
+                            pivot[function_name],
+                            color="0.6",
+                            linewidth=0.6,
+                            alpha=0.35,
+                            zorder=1,
+                        )
+
+                    mean_series = pivot.mean(axis=1)
+                    std_series = pivot.std(axis=1).fillna(0.0)
+                    valid = mean_series.notna()
+                    if valid.any():
+                        x_values = mean_series.index.to_numpy(dtype=float)[valid.to_numpy()]
+                        mean_values = mean_series.to_numpy(dtype=float)[valid.to_numpy()]
+                        std_values = std_series.to_numpy(dtype=float)[valid.to_numpy()]
+                        ax.fill_between(
+                            x_values,
+                            mean_values - std_values,
+                            mean_values + std_values,
+                            color="#2A6F97",
+                            alpha=0.15,
+                            linewidth=0,
+                            zorder=2,
+                        )
+                        ax.plot(
+                            x_values,
+                            mean_values,
+                            color="#2A6F97",
+                            linewidth=1.8,
+                            zorder=3,
+                        )
+
+            ax.set_ylim(0.0, 1.0)
+            if row_index == 0:
+                ax.set_title(_pretty_regularization_label(reg_state), fontsize=10)
+            if row_index < len(NOISE_ORDER) - 1:
+                ax.tick_params(labelbottom=False)
+            else:
+                ax.set_xlabel("Epoch")
+            if col_index > 0:
+                ax.tick_params(labelleft=False)
+                ax.set_ylabel("")
+            else:
+                ax.set_ylabel("AUROC")
+
+            if col_index == len(REGULARIZATION_ORDER) - 1:
+                ax.text(
+                    1.03,
+                    0.5,
+                    f"noise = {_pretty_noise_label(noise_value)}",
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="center",
+                    fontsize=10,
+                )
+
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
 def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(index=NOISE_ORDER, columns=REGULARIZATION_ORDER, dtype=float)
@@ -558,7 +718,7 @@ def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
     return im
 
 
-def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
+def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectories_dir: Path) -> None:
     if results_df.empty:
         raise ValueError("No best-epoch results found in the provided results directory")
 
@@ -587,6 +747,11 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path) -> None:
     _plot_auroc_vs_val_loss_scatter(results_df, output_dir / "auroc_vs_validation_loss.pgf")
 
     _plot_auroc_by_interaction_order(results_df, output_dir / "auroc_by_interaction_order.pgf")
+
+    _plot_interaction_recovery_trajectories(
+        trajectories_dir,
+        output_dir / "interaction_recovery_trajectories.pgf",
+    )
 
     def _function_sort_key(name: str):
         if str(name).startswith("f") and str(name)[1:].isdigit():
@@ -637,16 +802,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate thesis plots from best-epoch results")
     parser.add_argument("--results-root", default="results", help="Root folder containing big/small analysis CSVs")
     parser.add_argument("--output-dir", default="results/thesis_plots", help="Directory for generated thesis plots")
+    parser.add_argument("--trajectories-dir", default="results/trajectories", help="Directory containing trajectory CSVs")
     args = parser.parse_args()
 
     results_root = Path(args.results_root)
     output_dir = Path(args.output_dir)
+    trajectories_dir = Path(args.trajectories_dir)
 
     results_df = load_best_epoch_results(results_root)
     if results_df.empty:
         raise SystemExit(f"No best-epoch analysis CSVs found under {results_root}")
 
-    generate_thesis_plots(results_df, output_dir)
+    generate_thesis_plots(results_df, output_dir, trajectories_dir)
     print(f"Saved thesis plots to {output_dir}")
 
 
