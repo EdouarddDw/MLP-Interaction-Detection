@@ -678,6 +678,212 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     plt.close(fig)
 
 
+def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
+    if not trajectories_dir.exists() or not trajectories_dir.is_dir():
+        return pd.DataFrame(
+            columns=["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc"]
+        )
+
+    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv"))
+    if not trajectory_files:
+        return pd.DataFrame(
+            columns=["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc"]
+        )
+
+    rows = []
+    for path in trajectory_files:
+        frame = pd.read_csv(path)
+        if frame.empty or "auroc" not in frame.columns or "epoch" not in frame.columns:
+            continue
+
+        if "function" not in frame.columns and "function_name" in frame.columns:
+            frame = frame.rename(columns={"function_name": "function"})
+        if "experiment" not in frame.columns and "experiment_name" in frame.columns:
+            frame = frame.rename(columns={"experiment_name": "experiment"})
+
+        required_columns = {"function", "experiment", "noise", "dropout", "weight_decay"}
+        if not required_columns.issubset(frame.columns):
+            continue
+
+        frame = frame.copy()
+        frame["epoch"] = pd.to_numeric(frame["epoch"], errors="coerce")
+        frame["auroc"] = pd.to_numeric(frame["auroc"], errors="coerce")
+        frame["noise"] = pd.to_numeric(frame["noise"], errors="coerce")
+        frame["dropout"] = pd.to_numeric(frame["dropout"], errors="coerce")
+        if frame["weight_decay"].dtype == bool:
+            weight_decay = frame["weight_decay"]
+        else:
+            weight_decay = frame["weight_decay"].astype(str).str.lower().isin(["true", "1", "yes"])
+        frame["weight_decay"] = weight_decay
+        frame = frame.dropna(subset=["epoch", "auroc", "function", "experiment", "noise", "dropout"])
+        if frame.empty:
+            continue
+
+        peak_index = frame["auroc"].idxmax()
+        peak_row = frame.loc[peak_index]
+        regularization_state = _regularization_state(float(peak_row["dropout"]), bool(peak_row["weight_decay"]))
+        if regularization_state not in REGULARIZATION_ORDER:
+            continue
+
+        rows.append(
+            {
+                "function": peak_row["function"],
+                "experiment": peak_row["experiment"],
+                "noise": float(peak_row["noise"]),
+                "regularization_state": regularization_state,
+                "peak_auroc_epoch": int(float(peak_row["epoch"])),
+                "peak_auroc": float(peak_row["auroc"]),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc"]
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _plot_peak_epoch_vs_noise(summary_df: pd.DataFrame, output_path: Path) -> None:
+    if summary_df.empty:
+        return
+
+    summary_df = summary_df.copy()
+    summary_df = summary_df[summary_df["regularization_state"].isin(REGULARIZATION_ORDER)]
+    if summary_df.empty:
+        return
+
+    function_level = (
+        summary_df.groupby(["function", "noise", "regularization_state"], as_index=False)["peak_auroc_epoch"]
+        .mean()
+        .rename(columns={"peak_auroc_epoch": "function_mean_peak_epoch"})
+    )
+    if function_level.empty:
+        return
+
+    stats = (
+        function_level.groupby(["noise", "regularization_state"], as_index=False)["function_mean_peak_epoch"]
+        .agg(mean="mean", std="std", count="count")
+    )
+    if stats.empty:
+        return
+
+    _ensure_parent(output_path)
+    _setup_thesis_style()
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+
+    style_map = {
+        "base": {"color": "#2A6F97", "linestyle": "-"},
+        "dropout": {"color": "#E76F51", "linestyle": "--"},
+        "weight_decay": {"color": "#2A9D8F", "linestyle": "-.",},
+        "dropout+weight_decay": {"color": "#7A5195", "linestyle": ":"},
+    }
+
+    for reg_state in REGULARIZATION_ORDER:
+        state_stats = stats[stats["regularization_state"] == reg_state].copy()
+        if state_stats.empty:
+            continue
+        state_stats = state_stats.set_index("noise").reindex(NOISE_ORDER)
+        x_values = np.array(NOISE_ORDER, dtype=float)
+        mean_values = state_stats["mean"].to_numpy(dtype=float)
+        std_values = state_stats["std"].fillna(0.0).to_numpy(dtype=float)
+
+        valid = ~np.isnan(mean_values)
+        if not valid.any():
+            continue
+
+        style = style_map.get(reg_state, {"color": "0.4", "linestyle": "-"})
+        ax.plot(
+            x_values[valid],
+            mean_values[valid],
+            color=style["color"],
+            linestyle=style["linestyle"],
+            linewidth=1.6,
+            label=_pretty_regularization_label(reg_state),
+        )
+        ax.fill_between(
+            x_values[valid],
+            mean_values[valid] - std_values[valid],
+            mean_values[valid] + std_values[valid],
+            color=style["color"],
+            alpha=0.15,
+            linewidth=0,
+        )
+
+    ax.set_xlabel("Noise level")
+    ax.set_ylabel("Mean epoch of peak AUROC")
+    ax.set_xticks(NOISE_ORDER)
+    ax.set_xticklabels([_pretty_noise_label(noise) for noise in NOISE_ORDER])
+    ax.set_ylim(bottom=0)
+    ax.legend(frameon=False, fontsize=8, loc="best")
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
+def generate_peak_epoch_table(summary_df: pd.DataFrame, output_path: Path) -> None:
+    if summary_df.empty:
+        return
+
+    summary_df = summary_df.copy()
+    summary_df = summary_df[summary_df["regularization_state"].isin(REGULARIZATION_ORDER)]
+    if summary_df.empty:
+        return
+
+    function_level = (
+        summary_df.groupby(["function", "noise", "regularization_state"], as_index=False)["peak_auroc_epoch"]
+        .mean()
+        .rename(columns={"peak_auroc_epoch": "function_mean_peak_epoch"})
+    )
+    if function_level.empty:
+        return
+
+    stats = (
+        function_level.groupby(["noise", "regularization_state"], as_index=False)["function_mean_peak_epoch"]
+        .agg(mean="mean", std="std", count="count")
+    )
+    if stats.empty:
+        return
+
+    mean_pivot = stats.pivot(index="noise", columns="regularization_state", values="mean").reindex(index=NOISE_ORDER, columns=REGULARIZATION_ORDER)
+    std_pivot = stats.pivot(index="noise", columns="regularization_state", values="std").reindex(index=NOISE_ORDER, columns=REGULARIZATION_ORDER)
+
+    _ensure_parent(output_path)
+
+    lines = [
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\begin{tabular}{l" + "c" * len(REGULARIZATION_ORDER) + r"}",
+        r"\toprule",
+        "Noise level & " + " & ".join(_pretty_regularization_label(state) for state in REGULARIZATION_ORDER) + r" \\",
+        r"\midrule",
+    ]
+
+    for noise in NOISE_ORDER:
+        row_cells = [_pretty_noise_label(noise)]
+        for reg_state in REGULARIZATION_ORDER:
+            mean_value = mean_pivot.loc[noise, reg_state] if noise in mean_pivot.index and reg_state in mean_pivot.columns else np.nan
+            std_value = std_pivot.loc[noise, reg_state] if noise in std_pivot.index and reg_state in std_pivot.columns else np.nan
+            if pd.isna(mean_value):
+                cell = r"--"
+            else:
+                std_value = 0.0 if pd.isna(std_value) else float(std_value)
+                cell = f"{float(mean_value):.1f} $\\pm$ {std_value:.1f}"
+            row_cells.append(cell)
+        lines.append(" & ".join(row_cells) + r" \\")
+
+    lines.extend([
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\caption{Mean epoch of peak AUROC across functions by noise level and regularization state.}",
+        r"\end{table}",
+        "",
+    ])
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(index=NOISE_ORDER, columns=REGULARIZATION_ORDER, dtype=float)
@@ -752,6 +958,10 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         trajectories_dir,
         output_dir / "interaction_recovery_trajectories.pgf",
     )
+
+    peak_summary_df = compute_peak_auroc_epoch_summary(trajectories_dir)
+    _plot_peak_epoch_vs_noise(peak_summary_df, output_dir / "peak_epoch_vs_noise.pgf")
+    generate_peak_epoch_table(peak_summary_df, output_dir / "peak_epoch_table.tex")
 
     def _function_sort_key(name: str):
         if str(name).startswith("f") and str(name)[1:].isdigit():
