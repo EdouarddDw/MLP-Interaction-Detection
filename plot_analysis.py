@@ -16,6 +16,7 @@ from analysis import (
 )
 from config import EXPERIMENTS
 from synth import functions
+from thesis_plots import _save_pgf, _setup_thesis_style
 
 
 SNAPSHOT_ROOT = Path("snapshots")
@@ -23,12 +24,13 @@ RESULTS_DIR = Path("results")
 PLOTS_DIR = RESULTS_DIR / "plots"
 EPOCH_RESULTS_CSV = RESULTS_DIR / "auroc_by_epoch.csv"
 
-
-plt.rcParams["text.usetex"] = False
-plt.rcParams["font.family"] = "serif"
-plt.rcParams["font.serif"] = ["Computer Modern Roman", "Times New Roman", "DejaVu Serif"]
-plt.rcParams["pgf.rcfonts"] = False
-plt.rcParams["pgf.texsystem"] = "pdflatex"
+_LINE_STYLES = [
+    ("#1f77b4", "-"), ("#d62728", "--"), ("#2ca02c", "-."),
+    ("#ff7f0e", ":"), ("#9467bd", (0, (3, 1, 1, 1))),
+    ("#8c564b", (0, (5, 2))), ("#e377c2", (0, (1, 1))),
+    ("#7f7f7f", (0, (3, 5, 1, 5))), ("#bcbd22", "-"),
+    ("#17becf", "--"),
+]
 
 
 def _sorted_epoch_checkpoints(snapshot_dir: Path) -> list[Path]:
@@ -165,10 +167,15 @@ def save_epoch_results(results_df: pd.DataFrame, output_path: Path = EPOCH_RESUL
 
 
 def _summary_by_epoch(df: pd.DataFrame, group_column: str) -> pd.DataFrame:
+    clean = df.dropna(subset=["auroc"])
+    function_level = (
+        clean.groupby(["function_name", group_column, "epoch"], as_index=False)["auroc"]
+        .mean()
+        .rename(columns={"auroc": "function_mean_auroc"})
+    )
     summary = (
-        df.dropna(subset=["auroc"])
-        .groupby([group_column, "epoch"], as_index=False)["auroc"]
-        .agg(mean="mean", std="std", min="min", max="max", count="count")
+        function_level.groupby([group_column, "epoch"], as_index=False)["function_mean_auroc"]
+        .agg(mean="mean", std="std", count="count")
     )
     summary["std"] = summary["std"].fillna(0.0)
     summary["lower"] = summary["mean"] - summary["std"]
@@ -183,6 +190,12 @@ def _plot_grouped_lines(
     output_path: Path,
     ylabel: str = "AUROC",
 ):
+    """Plot one line per unique value of *group_column* from *summary_df*.
+
+    *summary_df* must contain columns: group_column, epoch, mean, lower, upper.
+    *group_column* controls which dimension is split into separate lines (e.g.
+    "function_name", "noise", "regularization_category", "optimizer").
+    """
     if summary_df.empty:
         return
 
@@ -190,8 +203,7 @@ def _plot_grouped_lines(
     groups = list(summary_df[group_column].dropna().unique())
     groups.sort(key=lambda value: _group_sort_key(group_column, value))
 
-    fig, ax = plt.subplots(figsize=(12, 7))
-    cmap = plt.get_cmap("tab10")
+    fig, ax = plt.subplots(figsize=(7.0, 3.5))
 
     for index, group_name in enumerate(groups):
         group_df = summary_df[summary_df[group_column] == group_name].sort_values("epoch")
@@ -203,23 +215,25 @@ def _plot_grouped_lines(
         lower = group_df["lower"].to_numpy(dtype=float)
         upper = group_df["upper"].to_numpy(dtype=float)
 
-        color = cmap(index % cmap.N)
-        ax.plot(epochs, means, label=str(group_name), color=color, linewidth=2)
+        color, linestyle = _LINE_STYLES[index % len(_LINE_STYLES)]
+        ax.plot(epochs, means, label=str(group_name), color=color, linestyle=linestyle, linewidth=2)
         ax.fill_between(epochs, lower, upper, color=color, alpha=0.18, linewidth=0)
 
     ax.set_title(title)
+    ax.title.set_fontsize(10)
     ax.set_xlabel("Epoch")
     ax.set_ylabel(ylabel)
-    ax.grid(True, alpha=0.25)
-    ax.legend(frameon=False, ncol=2)
+    ax.yaxis.grid(True)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
     fig.tight_layout()
-    pgf_path = output_path.with_suffix(".pgf")
-    fig.savefig(pgf_path, dpi=300, bbox_inches="tight", pad_inches=0.02)
+    _save_pgf(fig, output_path)
     plt.close(fig)
 
 
 def generate_plots(results_df: pd.DataFrame, plots_dir: Path = PLOTS_DIR) -> None:
     plots_dir.mkdir(parents=True, exist_ok=True)
+    _setup_thesis_style()
 
     function_summary = _summary_by_epoch(results_df, "function_name")
     _plot_grouped_lines(

@@ -313,6 +313,83 @@ def _plot_grouped_bars(
     plt.close(fig)
 
 
+def _plot_architecture_x_regularization(results_df: pd.DataFrame, output_path: Path) -> None:
+    if results_df.empty:
+        return
+
+    # Stage 1: mean AUROC within each (function_name, model_size, regularization_state)
+    function_level = (
+        results_df.groupby(["function_name", "model_size", "regularization_state"], as_index=False)["auroc"]
+        .mean()
+        .rename(columns={"auroc": "function_mean_auroc"})
+    )
+
+    # Stage 2: average across functions, grouped by (model_size, regularization_state)
+    summary = (
+        function_level.groupby(["model_size", "regularization_state"], as_index=False)["function_mean_auroc"]
+        .agg(mean="mean", std="std")
+    )
+    summary["std"] = summary["std"].fillna(0.0)
+
+    if summary.empty:
+        return
+
+    _ensure_parent(output_path)
+
+    x_values = REGULARIZATION_ORDER
+    group_values = [g for g in MODEL_SIZE_ORDER if g in summary["model_size"].unique()]
+    x_positions = np.arange(len(x_values))
+    bar_width = 0.35
+
+    fig, ax = plt.subplots(figsize=(7.5, 3.5))
+    colors = {"small": "#2A6F97", "big": "#E76F51"}
+
+    for index, model_size in enumerate(group_values):
+        group_df = summary[summary["model_size"] == model_size].copy()
+        means = []
+        errors = []
+        for reg_state in x_values:
+            match = group_df[group_df["regularization_state"] == reg_state]
+            if match.empty:
+                means.append(np.nan)
+                errors.append(np.nan)
+            else:
+                means.append(float(match.iloc[0]["mean"]))
+                errors.append(float(match.iloc[0]["std"]))
+
+        offset = (index - (len(group_values) - 1) / 2) * bar_width
+        positions = x_positions + offset
+        ax.bar(
+            positions,
+            means,
+            width=bar_width * 0.92,
+            yerr=errors,
+            capsize=4,
+            color=colors.get(model_size, None),
+            label=model_size,
+            alpha=0.9,
+            edgecolor="white",
+            linewidth=0.8,
+        )
+
+    ax.set_title("Regularisation Effect by Architecture")
+    ax.title.set_fontsize(10)
+    ax.set_ylabel("Average AUROC (±1 SD across functions)")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(
+        [_pretty_regularization_label(s) for s in x_values],
+        rotation=15,
+        ha="right",
+    )
+    ax.set_ylim(0.0, 1.0)
+    ax.yaxis.grid(True)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
 def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
     if summary.empty:
         return
@@ -1056,6 +1133,39 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
     plt.close(fig)
 
 
+def _plot_summary_heatmap(results_df: pd.DataFrame, output_path: Path) -> None:
+    if results_df.empty:
+        return
+
+    # Stage 1: mean within each (function_name, noise, regularization_state)
+    function_level = (
+        results_df.groupby(["function_name", "noise", "regularization_state"], as_index=False)["auroc"]
+        .mean()
+        .rename(columns={"auroc": "function_mean_auroc"})
+    )
+
+    # Stage 2: mean across functions, grouped by (noise, regularization_state)
+    cross_function = (
+        function_level.groupby(["noise", "regularization_state"], as_index=False)["function_mean_auroc"]
+        .mean()
+    )
+
+    matrix = (
+        cross_function.pivot(index="noise", columns="regularization_state", values="function_mean_auroc")
+        .reindex(index=NOISE_ORDER, columns=REGULARIZATION_ORDER)
+    )
+
+    _ensure_parent(output_path)
+
+    fig, ax = plt.subplots(figsize=(7.0, 3.5))
+    im = _plot_heatmap(ax, matrix, "Mean AUROC by Noise and Regularisation (all functions)")
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label("Mean AUROC")
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
 def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectories_dir: Path, results_root: Path) -> None:
     if results_df.empty:
         raise ValueError("No best-epoch results found in the provided results directory")
@@ -1081,6 +1191,8 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         title="Effect of Regularisation on Average AUROC",
         output_path=output_dir / "regularization_effect_by_model_size.pgf",
     )
+
+    _plot_architecture_x_regularization(results_df, output_dir / "architecture_x_regularization.pgf")
 
     _plot_auroc_vs_val_loss_scatter(results_df, output_dir / "auroc_vs_validation_loss.pgf")
 
@@ -1123,6 +1235,8 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
                 ascending=True,
             ).reset_index(drop=True)
             _plot_dumbbell_comparison(comparison_summary, output_dir / "architecture_comparison_big_vs_small.pgf")
+
+    _plot_summary_heatmap(results_df, output_dir / "summary_heatmap_noise_x_regularization.pgf")
 
     heatmap_dir = output_dir / "heatmaps"
     heatmap_dir.mkdir(parents=True, exist_ok=True)
