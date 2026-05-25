@@ -740,6 +740,7 @@ def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots")
         )
         if nid_interactions is None:
             continue
+        # Restricted evaluation (G∪D) used for trajectory AUROC
         scores, labels = compute_auroc_data(gt, nid_interactions)
         metrics = compute_metrics(scores, labels)
         trajectory.append({"epoch": epoch, "auroc": metrics["auroc"]})

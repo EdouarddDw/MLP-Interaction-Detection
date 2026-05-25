@@ -27,6 +27,11 @@ from scipy.stats import spearmanr
 from synth import functions as synth_functions
 
 
+# All plots use restricted AUROC evaluated over G∪D (not the full 2^[10] space).
+# The auroc_full column is used only in _plot_evaluation_space_comparison.
+# See compute_auroc_data in analysis.py for the evaluation formulations.
+AUROC_COLUMN = "auroc"
+
 NOISE_ORDER = [0.0, 0.1, 0.2, 0.5, 1.0]
 REGULARIZATION_ORDER = [
     "base",
@@ -172,9 +177,9 @@ def _function_level_summary(df: pd.DataFrame, group_cols: list[str]) -> pd.DataF
 
     # First aggregate within each function.
     function_level = (
-        df.groupby(["function_name", *group_cols], as_index=False)["auroc"]
+        df.groupby(["function_name", *group_cols], as_index=False)[AUROC_COLUMN]
         .mean()
-        .rename(columns={"auroc": "function_mean_auroc"})
+        .rename(columns={AUROC_COLUMN: "function_mean_auroc"})
     )
 
     # Then average those function means across functions.
@@ -191,7 +196,7 @@ def _function_level_summary(df: pd.DataFrame, group_cols: list[str]) -> pd.DataF
 def _global_summary(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
-    summary = df.groupby(group_cols, as_index=False)["auroc"].agg(mean="mean", std="std", count="count")
+    summary = df.groupby(group_cols, as_index=False)[AUROC_COLUMN].agg(mean="mean", std="std", count="count")
     summary["std"] = summary["std"].fillna(0.0)
     summary["lower"] = summary["mean"] - summary["std"]
     summary["upper"] = summary["mean"] + summary["std"]
@@ -240,6 +245,7 @@ def _setup_thesis_style() -> None:
     )
 
 
+# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_grouped_bars(
     summary: pd.DataFrame,
     x_col: str,
@@ -316,15 +322,16 @@ def _plot_grouped_bars(
     plt.close(fig)
 
 
+# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_architecture_x_regularization(results_df: pd.DataFrame, output_path: Path) -> None:
     if results_df.empty:
         return
 
     # Stage 1: mean AUROC within each (function_name, model_size, regularization_state)
     function_level = (
-        results_df.groupby(["function_name", "model_size", "regularization_state"], as_index=False)["auroc"]
+        results_df.groupby(["function_name", "model_size", "regularization_state"], as_index=False)[AUROC_COLUMN]
         .mean()
-        .rename(columns={"auroc": "function_mean_auroc"})
+        .rename(columns={AUROC_COLUMN: "function_mean_auroc"})
     )
 
     # Stage 2: average across functions, grouped by (model_size, regularization_state)
@@ -393,6 +400,7 @@ def _plot_architecture_x_regularization(results_df: pd.DataFrame, output_path: P
     plt.close(fig)
 
 
+# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
     if summary.empty:
         return
@@ -424,17 +432,18 @@ def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
     plt.close(fig)
 
 
+# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path) -> None:
     if results_df.empty or "val_loss" not in results_df.columns:
         return
 
-    plot_df = results_df.dropna(subset=["auroc", "val_loss"]).copy()
+    plot_df = results_df.dropna(subset=[AUROC_COLUMN, "val_loss"]).copy()
     if plot_df.empty:
         return
 
     # Aggregate to one point per (function_name, model_size) pair
     agg_df = (
-        plot_df.groupby(["function_name", "model_size"], as_index=False)[["auroc", "val_loss"]]
+        plot_df.groupby(["function_name", "model_size"], as_index=False)[[AUROC_COLUMN, "val_loss"]]
         .mean()
     )
     if agg_df.empty:
@@ -495,6 +504,7 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
     plt.close(fig)
 
 
+# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path) -> None:
     """
     Plot AUROC grouped by interaction order and regularization state.
@@ -608,6 +618,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
 
     frames: list[pd.DataFrame] = []
     for path in trajectory_files:
+        # auroc column in trajectory CSVs is restricted (G∪D) — see analyze_trajectory in analysis.py
         frame = pd.read_csv(path)
         if frame.empty:
             continue
@@ -635,7 +646,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     plot_df["noise"] = pd.to_numeric(plot_df["noise"], errors="coerce")
     plot_df["dropout"] = pd.to_numeric(plot_df["dropout"], errors="coerce")
     plot_df["weight_decay"] = plot_df["weight_decay"].astype(bool)
-    plot_df = plot_df.dropna(subset=["epoch", "auroc", "function_name", "noise", "dropout"])
+    plot_df = plot_df.dropna(subset=["epoch", AUROC_COLUMN, "function_name", "noise", "dropout"])
 
     plot_df["regularization_state"] = [
         _regularization_state(dropout, weight_decay)
@@ -683,7 +694,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
 
             if not cell_df.empty:
                 function_epoch = (
-                    cell_df.groupby(["function_name", "epoch"], as_index=False)["auroc"]
+                    cell_df.groupby(["function_name", "epoch"], as_index=False)[AUROC_COLUMN]
                     .mean()
                 )
                 if not function_epoch.empty:
@@ -795,10 +806,11 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
         else:
             weight_decay = frame["weight_decay"].astype(str).str.lower().isin(["true", "1", "yes"])
         frame["weight_decay"] = weight_decay
-        frame = frame.dropna(subset=["epoch", "auroc", "function", "experiment", "noise", "dropout"])
+        frame = frame.dropna(subset=["epoch", AUROC_COLUMN, "function", "experiment", "noise", "dropout"])
         if frame.empty:
             continue
 
+        # peak_auroc is restricted AUROC (G∪D)
         peak_index = frame["auroc"].idxmax()
         peak_row = frame.loc[peak_index]
         regularization_state = _regularization_state(float(peak_row["dropout"]), bool(peak_row["weight_decay"]))
@@ -964,12 +976,13 @@ def generate_peak_epoch_table(summary_df: pd.DataFrame, output_path: Path) -> No
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(index=NOISE_ORDER, columns=REGULARIZATION_ORDER, dtype=float)
 
     pivot = (
-        df.groupby(["noise", "regularization_state"], as_index=False)["auroc"]
+        df.groupby(["noise", "regularization_state"], as_index=False)[AUROC_COLUMN]
         .mean()
         .pivot(index="noise", columns="regularization_state", values="auroc")
     )
@@ -1004,6 +1017,7 @@ def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
     return im
 
 
+# Intentionally compares both formulations — do not change to auroc_full only
 def _plot_evaluation_space_comparison(results_df: pd.DataFrame, output_path: Path) -> None:
     if "auroc_full" not in results_df.columns or results_df["auroc_full"].notna().sum() == 0:
         warnings.warn(
@@ -1145,6 +1159,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
         warnings.warn(f"Epoch results file not found: {epoch_results_path}")
         return
 
+    # auroc column is restricted (G∪D) — see collect_epoch_level_results in plot_analysis.py
     df = pd.read_csv(epoch_results_path)
     if df.empty:
         warnings.warn(f"Epoch results file is empty: {epoch_results_path}")
@@ -1168,7 +1183,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
 
     df = df[df["regularization_state"] == "base"].copy()
     df = df[df["noise"].isin([0.0, 1.0])].copy()
-    df = df.dropna(subset=["epoch", "auroc", "val_loss", "function_name"])
+    df = df.dropna(subset=["epoch", AUROC_COLUMN, "val_loss", "function_name"])
 
     if df.empty:
         warnings.warn("No data after filtering for noise=0/1 and base regularization.")
@@ -1195,7 +1210,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
 
         # Stage 1: average within (function_name, epoch) across experiments/optimisers
         func_epoch = (
-            noise_df.groupby(["function_name", "epoch"], as_index=False)[["auroc", "val_loss"]]
+            noise_df.groupby(["function_name", "epoch"], as_index=False)[[AUROC_COLUMN, "val_loss"]]
             .mean()
         )
 
@@ -1207,7 +1222,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
             continue
 
         # Stage 2: aggregate across functions per epoch
-        auroc_agg = func_epoch.groupby("epoch")["auroc"].agg(mean="mean", std="std")
+        auroc_agg = func_epoch.groupby("epoch")[AUROC_COLUMN].agg(mean="mean", std="std")
         loss_agg = func_epoch.groupby("epoch")["val_loss"].agg(mean="mean", std="std")
         epoch_stats = pd.DataFrame({
             "auroc_mean": auroc_agg["mean"],
@@ -1272,15 +1287,16 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
     plt.close(fig)
 
 
+# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_summary_heatmap(results_df: pd.DataFrame, output_path: Path) -> None:
     if results_df.empty:
         return
 
     # Stage 1: mean within each (function_name, noise, regularization_state)
     function_level = (
-        results_df.groupby(["function_name", "noise", "regularization_state"], as_index=False)["auroc"]
+        results_df.groupby(["function_name", "noise", "regularization_state"], as_index=False)[AUROC_COLUMN]
         .mean()
-        .rename(columns={"auroc": "function_mean_auroc"})
+        .rename(columns={AUROC_COLUMN: "function_mean_auroc"})
     )
 
     # Stage 2: mean across functions, grouped by (noise, regularization_state)
@@ -1361,7 +1377,7 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     comparison_df = results_df[results_df["function_name"].isin(COMPARISON_FUNCTIONS)].copy()
     if not comparison_df.empty:
         comparison_summary = (
-            comparison_df.groupby(["function_name", "model_size"], as_index=False)["auroc"]
+            comparison_df.groupby(["function_name", "model_size"], as_index=False)[AUROC_COLUMN]
             .mean()
             .pivot(index="function_name", columns="model_size", values="auroc")
             .reset_index()
