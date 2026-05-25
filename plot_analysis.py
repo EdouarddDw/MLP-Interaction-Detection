@@ -136,6 +136,8 @@ def collect_epoch_level_results(snapshot_root=SNAPSHOT_ROOT, num_samples: int = 
                     rows.append(row)
                     continue
 
+                # Epoch-level trajectories use restricted AUROC only; auroc_full is not
+                # written to auroc_by_epoch.csv and is not needed by this module.
                 scores, labels = compute_auroc_data(gt_interactions, nid_interactions)
                 if scores is None:
                     rows.append({**row, "success": True})

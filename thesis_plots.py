@@ -146,6 +146,9 @@ def load_best_epoch_results(results_root: Path) -> pd.DataFrame:
     df = df[df["success"].fillna(False)].copy()
     df = df[df["auroc"].notna()].copy()
 
+    if "auroc_full" not in df.columns:
+        df["auroc_full"] = None
+
     df["noise"] = df["noise"].astype(float)
     df["dropout"] = df["dropout"].astype(float)
     df["weight_decay"] = df["weight_decay"].astype(bool)
@@ -1001,6 +1004,142 @@ def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
     return im
 
 
+def _plot_evaluation_space_comparison(results_df: pd.DataFrame, output_path: Path) -> None:
+    if "auroc_full" not in results_df.columns or results_df["auroc_full"].notna().sum() == 0:
+        warnings.warn(
+            "auroc_full column not present or contains no non-null values; "
+            "skipping evaluation_space_comparison plot."
+        )
+        return
+
+    plot_df = results_df.dropna(subset=["auroc", "auroc_full"]).copy()
+    if plot_df.empty:
+        warnings.warn(
+            "No rows with both auroc and auroc_full non-null; "
+            "skipping evaluation_space_comparison plot."
+        )
+        return
+
+    _ensure_parent(output_path)
+
+    reg_colors = {
+        "base": "#2A6F97",
+        "dropout": "#E76F51",
+        "weight_decay": "#2A9D8F",
+        "dropout+weight_decay": "#7A5195",
+    }
+    reg_markers = {
+        "base": "o",
+        "dropout": "^",
+        "weight_decay": "s",
+        "dropout+weight_decay": "D",
+    }
+
+    fig, (ax_scatter, ax_hist) = plt.subplots(1, 2, figsize=(7.5, 3.2))
+
+    # --- Left panel: scatter ---
+    for reg_state in REGULARIZATION_ORDER:
+        subset = plot_df[plot_df["regularization_state"] == reg_state]
+        if subset.empty:
+            continue
+        ax_scatter.scatter(
+            subset["auroc"].to_numpy(dtype=float),
+            subset["auroc_full"].to_numpy(dtype=float),
+            s=12,
+            alpha=0.65,
+            color=reg_colors.get(reg_state, "0.5"),
+            marker=reg_markers.get(reg_state, "o"),
+            edgecolors="none",
+            label=_pretty_regularization_label(reg_state),
+            zorder=3,
+        )
+
+    ax_scatter.plot(
+        [0, 1], [0, 1],
+        color="gray",
+        linewidth=0.8,
+        linestyle="--",
+        label="perfect agreement",
+        zorder=2,
+    )
+
+    rho, _ = spearmanr(
+        plot_df["auroc"].to_numpy(dtype=float),
+        plot_df["auroc_full"].to_numpy(dtype=float),
+    )
+    ax_scatter.text(
+        0.97, 0.04,
+        rf"$\rho = {rho:.3f}$",
+        transform=ax_scatter.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color="0.3",
+    )
+
+    ax_scatter.set_xlim(0, 1)
+    ax_scatter.set_ylim(0, 1)
+    ax_scatter.set_xlabel(r"Restricted AUROC ($\mathcal{G} \cup \mathcal{D}$)")
+    ax_scatter.set_ylabel(r"Full-space AUROC ($2^{[10]}$)")
+    ax_scatter.set_title("Agreement between evaluation formulations", fontsize=9)
+    ax_scatter.legend(
+        frameon=False,
+        fontsize=8,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0,
+    )
+
+    # --- Right panel: difference histogram ---
+    delta = plot_df["auroc_full"].to_numpy(dtype=float) - plot_df["auroc"].to_numpy(dtype=float)
+
+    ax_hist.hist(
+        delta,
+        bins=40,
+        color="#2A6F97",
+        alpha=0.8,
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    ax_hist.axvline(0.0, color="gray", linestyle="--", linewidth=1.0)
+    mean_delta = float(np.mean(delta))
+    ax_hist.axvline(
+        mean_delta,
+        color="#E76F51",
+        linestyle="-",
+        linewidth=1.2,
+    )
+    ax_hist.set_xlim(left=-0.05)
+    ax_hist.text(
+        mean_delta + 0.01,
+        ax_hist.get_ylim()[1] * 0.92,
+        f"mean = {mean_delta:.3f}",
+        color="#E76F51",
+        fontsize=8,
+        va="top",
+    )
+    ax_hist.set_xlabel("Full-space AUROC\n$-$ Restricted AUROC")
+    ax_hist.set_ylabel("Count")
+    ax_hist.set_title("Distribution of AUROC difference", fontsize=9)
+
+    fig.text(
+        0.5,
+        -0.08,
+        r"Each point represents one experimental condition. "
+        r"Positive $\Delta$ indicates full-space AUROC exceeds restricted AUROC.",
+        ha="center",
+        va="top",
+        fontsize=8,
+        color="0.4",
+    )
+
+    fig.subplots_adjust(right=0.97)
+    fig.subplots_adjust(wspace=0.45)
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
 def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) -> None:
     if not epoch_results_path.exists():
         warnings.warn(f"Epoch results file not found: {epoch_results_path}")
@@ -1173,6 +1312,8 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     output_dir.mkdir(parents=True, exist_ok=True)
     # Set up style once at the beginning for all plots
     _setup_thesis_style()
+
+    _plot_evaluation_space_comparison(results_df, output_dir / "evaluation_space_comparison.pgf")
 
     noise_summary = _function_level_summary(results_df, ["model_size", "noise"])
     _plot_grouped_bars(
