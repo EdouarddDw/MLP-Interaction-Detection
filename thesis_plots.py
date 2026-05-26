@@ -27,9 +27,10 @@ from scipy.stats import spearmanr
 from synth import functions as synth_functions
 
 
-# All plots use restricted AUROC evaluated over G∪D (not the full 2^[10] space).
-# The auroc_full column is used only in _plot_evaluation_space_comparison.
-# See compute_auroc_data in analysis.py for the evaluation formulations.
+# Primary metric: full-space AUPRC over all 1013 candidates in 2^[10].
+# AUROC_COLUMN is retained as a secondary metric; _plot_evaluation_space_comparison
+# uses both intentionally. See compute_auroc_data in analysis.py.
+AUPRC_COLUMN = "auprc_full"
 AUROC_COLUMN = "auroc"
 
 NOISE_ORDER = [0.0, 0.1, 0.2, 0.5, 1.0]
@@ -154,6 +155,13 @@ def load_best_epoch_results(results_root: Path) -> pd.DataFrame:
     if "auroc_full" not in df.columns:
         df["auroc_full"] = None
 
+    if "auprc_full" not in df.columns:
+        df["auprc_full"] = None
+    if df["auprc_full"].notna().sum() == 0:
+        print(
+            "WARNING: auprc_full has no non-null values — rerun analysis.py to generate it"
+        )
+
     df["noise"] = df["noise"].astype(float)
     df["dropout"] = df["dropout"].astype(float)
     df["weight_decay"] = df["weight_decay"].astype(bool)
@@ -177,9 +185,9 @@ def _function_level_summary(df: pd.DataFrame, group_cols: list[str]) -> pd.DataF
 
     # First aggregate within each function.
     function_level = (
-        df.groupby(["function_name", *group_cols], as_index=False)[AUROC_COLUMN]
+        df.groupby(["function_name", *group_cols], as_index=False)[AUPRC_COLUMN]
         .mean()
-        .rename(columns={AUROC_COLUMN: "function_mean_auroc"})
+        .rename(columns={AUPRC_COLUMN: "function_mean_auroc"})
     )
 
     # Then average those function means across functions.
@@ -196,7 +204,7 @@ def _function_level_summary(df: pd.DataFrame, group_cols: list[str]) -> pd.DataF
 def _global_summary(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
-    summary = df.groupby(group_cols, as_index=False)[AUROC_COLUMN].agg(mean="mean", std="std", count="count")
+    summary = df.groupby(group_cols, as_index=False)[AUPRC_COLUMN].agg(mean="mean", std="std", count="count")
     summary["std"] = summary["std"].fillna(0.0)
     summary["lower"] = summary["mean"] - summary["std"]
     summary["upper"] = summary["mean"] + summary["std"]
@@ -245,7 +253,6 @@ def _setup_thesis_style() -> None:
     )
 
 
-# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_grouped_bars(
     summary: pd.DataFrame,
     x_col: str,
@@ -253,7 +260,8 @@ def _plot_grouped_bars(
     output_path: Path,
     group_col: str = "model_size",
     x_order: Iterable | None = None,
-    ylabel: str = "Average AUROC",
+    ylabel: str = "Average AUPRC",
+    auprc_random_baseline: float = 0.0,
 ) -> None:
     if summary.empty:
         return
@@ -303,9 +311,10 @@ def _plot_grouped_bars(
             linewidth=0.8,
         )
 
+    max_val = summary["mean"].max() if not summary.empty else 0.0
     ax.set_title(title)
     ax.title.set_fontsize(10)
-    ax.set_ylabel("Average AUROC (±1 SD across functions)")
+    ax.set_ylabel("Average AUPRC (±1 SD across functions)")
     ax.set_xticks(x_positions)
     ax.set_xticklabels([
         _pretty_regularization_label(str(v)) if x_col == "regularization_state"
@@ -313,7 +322,9 @@ def _plot_grouped_bars(
         else str(v)
         for v in x_values
     ], rotation=15, ha="right")
-    ax.set_ylim(0.0, 1.0)
+    ax.set_ylim(0.0, None)
+    ax.set_ylim(top=max_val * 1.15)
+    ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
     ax.yaxis.grid(True)
     ax.set_axisbelow(True)
     ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
@@ -322,16 +333,15 @@ def _plot_grouped_bars(
     plt.close(fig)
 
 
-# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
-def _plot_architecture_x_regularization(results_df: pd.DataFrame, output_path: Path) -> None:
+def _plot_architecture_x_regularization(results_df: pd.DataFrame, output_path: Path, auprc_random_baseline: float = 0.0) -> None:
     if results_df.empty:
         return
 
-    # Stage 1: mean AUROC within each (function_name, model_size, regularization_state)
+    # Stage 1: mean AUPRC within each (function_name, model_size, regularization_state)
     function_level = (
-        results_df.groupby(["function_name", "model_size", "regularization_state"], as_index=False)[AUROC_COLUMN]
+        results_df.groupby(["function_name", "model_size", "regularization_state"], as_index=False)[AUPRC_COLUMN]
         .mean()
-        .rename(columns={AUROC_COLUMN: "function_mean_auroc"})
+        .rename(columns={AUPRC_COLUMN: "function_mean_auroc"})
     )
 
     # Stage 2: average across functions, grouped by (model_size, regularization_state)
@@ -382,16 +392,19 @@ def _plot_architecture_x_regularization(results_df: pd.DataFrame, output_path: P
             linewidth=0.8,
         )
 
+    max_val = summary["mean"].max() if not summary.empty else 0.0
     ax.set_title("Regularisation Effect by Architecture")
     ax.title.set_fontsize(10)
-    ax.set_ylabel("Average AUROC (±1 SD across functions)")
+    ax.set_ylabel("Average AUPRC (±1 SD across functions)")
     ax.set_xticks(x_positions)
     ax.set_xticklabels(
         [_pretty_regularization_label(s) for s in x_values],
         rotation=15,
         ha="right",
     )
-    ax.set_ylim(0.0, 1.0)
+    ax.set_ylim(0.0, None)
+    ax.set_ylim(top=max_val * 1.15)
+    ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
     ax.yaxis.grid(True)
     ax.set_axisbelow(True)
     ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
@@ -422,9 +435,10 @@ def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels(summary["function_name"].tolist())
-    ax.set_xlabel("Mean AUROC")
+    ax.set_xlabel("Mean AUPRC")
     ax.set_title("Big vs Small Model Comparison by Function")
-    ax.set_xlim(0.0, 1.0)
+    max_x = max(np.nanmax(small), np.nanmax(big)) if len(small) > 0 and len(big) > 0 else 0.2
+    ax.set_xlim(0.0, max_x * 1.15)
     ax.grid(axis="x", alpha=0.25)
     ax.legend(frameon=False, loc="lower right")
     fig.tight_layout()
@@ -432,18 +446,17 @@ def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
     plt.close(fig)
 
 
-# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
-def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path) -> None:
+def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path, auprc_random_baseline: float = 0.0) -> None:
     if results_df.empty or "val_loss" not in results_df.columns:
         return
 
-    plot_df = results_df.dropna(subset=[AUROC_COLUMN, "val_loss"]).copy()
+    plot_df = results_df.dropna(subset=[AUPRC_COLUMN, "val_loss"]).copy()
     if plot_df.empty:
         return
 
     # Aggregate to one point per (function_name, model_size) pair
     agg_df = (
-        plot_df.groupby(["function_name", "model_size"], as_index=False)[[AUROC_COLUMN, "val_loss"]]
+        plot_df.groupby(["function_name", "model_size"], as_index=False)[[AUPRC_COLUMN, "val_loss"]]
         .mean()
     )
     if agg_df.empty:
@@ -462,7 +475,7 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
             continue
         ax.scatter(
             subset["val_loss"],
-            subset["auroc"],
+            subset[AUPRC_COLUMN],
             s=16,
             alpha=0.75,
             color=colors[model_size],
@@ -473,7 +486,7 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
 
     # Filter to positive val_loss to avoid log-scale issues
     x_all = agg_df["val_loss"].to_numpy(dtype=float)
-    y_all = agg_df["auroc"].to_numpy(dtype=float)
+    y_all = agg_df[AUPRC_COLUMN].to_numpy(dtype=float)
     valid_mask = x_all > 0
     x = x_all[valid_mask]
     y = y_all[valid_mask]
@@ -490,22 +503,22 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path)
         ax.plot(x_line, y_line, color="black", linewidth=1.0, linestyle="--", label="linear trend")
 
         p_str = f"{pval:.3f}" if pval >= 0.001 else "$p < 0.001$"
-        ax.set_title(rf"AUROC vs Validation Loss ($\rho$={rho:.2f}, {p_str})")
+        ax.set_title(rf"AUPRC vs Validation Loss ($\rho$={rho:.2f}, {p_str})")
     else:
-        ax.set_title("AUROC vs Validation Loss")
+        ax.set_title("AUPRC vs Validation Loss")
 
     ax.title.set_fontsize(9)
     ax.set_xscale("log")
     ax.set_xlabel("Validation loss (log scale)")
-    ax.set_ylabel("AUROC")
+    ax.set_ylabel("AUPRC")
+    ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
     ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
     fig.tight_layout()
     _save_pgf(fig, output_path)
     plt.close(fig)
 
 
-# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
-def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path) -> None:
+def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path, auprc_random_baseline: float = 0.0) -> None:
     """
     Plot AUROC grouped by interaction order and regularization state.
     
@@ -593,13 +606,16 @@ def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path
             linewidth=0.8,
         )
     
-    ax.set_title("Effect of Interaction Order on Average AUROC")
+    max_val = final_summary["mean"].max() if not final_summary.empty else 0.0
+    ax.set_title("Effect of Interaction Order on Average AUPRC")
     ax.title.set_fontsize(10)
-    ax.set_ylabel("Average AUROC (±1 SD across functions)")
+    ax.set_ylabel("Average AUPRC (±1 SD across functions)")
     ax.set_xticks(x_positions)
     ax.set_xticklabels([f"{int(order)}" for order in interaction_orders], rotation=0)
     ax.set_xlabel("Maximum Interaction Order")
-    ax.set_ylim(0.0, 1.0)
+    ax.set_ylim(0.0, None)
+    ax.set_ylim(top=max_val * 1.15)
+    ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
     ax.yaxis.grid(True)
     ax.set_axisbelow(True)
     ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
@@ -609,6 +625,11 @@ def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path
 
 
 def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path: Path) -> None:
+    """Plot AUPRC recovery trajectories across epochs.
+
+    Uses the restricted (G∪D) AUPRC column from trajectory CSVs, not auprc_full.
+    Full-space AUPRC is too expensive to compute at every epoch checkpoint.
+    """
     if not trajectories_dir.exists() or not trajectories_dir.is_dir():
         return
 
@@ -627,7 +648,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
 
     frames: list[pd.DataFrame] = []
     for model_size, path in trajectory_files:
-        # auroc column in trajectory CSVs is restricted (G∪D) — see analyze_trajectory in analysis.py
+        # auprc column in trajectory CSVs is restricted (G∪D) — see analyze_trajectory in analysis.py
         frame = pd.read_csv(path)
         if frame.empty:
             continue
@@ -647,17 +668,17 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     if plot_df.empty:
         return
 
-    required_columns = {"epoch", "auroc", "function_name", "noise", "dropout", "weight_decay"}
+    required_columns = {"epoch", "auprc", "function_name", "noise", "dropout", "weight_decay"}
     if not required_columns.issubset(plot_df.columns):
         return
 
     plot_df = plot_df.copy()
     plot_df["epoch"] = pd.to_numeric(plot_df["epoch"], errors="coerce")
-    plot_df["auroc"] = pd.to_numeric(plot_df["auroc"], errors="coerce")
+    plot_df["auprc"] = pd.to_numeric(plot_df["auprc"], errors="coerce")
     plot_df["noise"] = pd.to_numeric(plot_df["noise"], errors="coerce")
     plot_df["dropout"] = pd.to_numeric(plot_df["dropout"], errors="coerce")
     plot_df["weight_decay"] = plot_df["weight_decay"].astype(bool)
-    plot_df = plot_df.dropna(subset=["epoch", AUROC_COLUMN, "function_name", "noise", "dropout"])
+    plot_df = plot_df.dropna(subset=["epoch", "auprc", "function_name", "noise", "dropout"])
 
     plot_df["regularization_state"] = [
         _regularization_state(dropout, weight_decay)
@@ -705,13 +726,13 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
 
             if not cell_df.empty:
                 function_epoch = (
-                    cell_df.groupby(["function_name", "epoch"], as_index=False)[AUROC_COLUMN]
+                    cell_df.groupby(["function_name", "epoch"], as_index=False)["auprc"]
                     .mean()
                 )
                 if not function_epoch.empty:
                     function_names = sorted(function_epoch["function_name"].dropna().unique(), key=_function_sort_key)
                     pivot = (
-                        function_epoch.pivot(index="epoch", columns="function_name", values="auroc")
+                        function_epoch.pivot(index="epoch", columns="function_name", values="auprc")
                         .reindex(all_epochs)
                     )
 
@@ -762,7 +783,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
                 ax.tick_params(labelleft=False)
                 ax.set_ylabel("")
             else:
-                ax.set_ylabel("AUROC")
+                ax.set_ylabel("AUPRC (restricted, G∪D)")
 
             if col_index == len(REGULARIZATION_ORDER) - 1:
                 ax.text(
@@ -993,15 +1014,14 @@ def generate_peak_epoch_table(summary_df: pd.DataFrame, output_path: Path) -> No
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(index=NOISE_ORDER, columns=REGULARIZATION_ORDER, dtype=float)
 
     pivot = (
-        df.groupby(["noise", "regularization_state"], as_index=False)[AUROC_COLUMN]
+        df.groupby(["noise", "regularization_state"], as_index=False)[AUPRC_COLUMN]
         .mean()
-        .pivot(index="noise", columns="regularization_state", values="auroc")
+        .pivot(index="noise", columns="regularization_state", values=AUPRC_COLUMN)
     )
     pivot = pivot.reindex(index=NOISE_ORDER, columns=REGULARIZATION_ORDER)
     return pivot
@@ -1009,7 +1029,7 @@ def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
 
 def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
     data = matrix.to_numpy(dtype=float)
-    im = ax.imshow(data, vmin=0.0, vmax=1.0, cmap="cividis", aspect="auto")
+    im = ax.imshow(data, vmin=0.0, vmax=0.2, cmap="cividis", aspect="auto")
 
     ax.set_xticks(np.arange(len(matrix.columns)))
     ax.set_xticklabels([_pretty_regularization_label(col) for col in matrix.columns], rotation=20, ha="right")
@@ -1027,8 +1047,8 @@ def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
                 color = "white"
             else:
                 label = f"{value:.2f}"
-                # 0.55 is the luminance crossover point for cividis colormap
-                color = "white" if value < 0.55 else "black"
+                # at vmax=0.2, value < 0.10 is the crossover for cividis luminance
+                color = "white" if value < 0.10 else "black"
             ax.text(j, i, label, ha="center", va="center", fontsize=9, color=color)
 
     return im
@@ -1304,16 +1324,15 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
     plt.close(fig)
 
 
-# Uses restricted AUROC (G∪D) — see compute_auroc_data in analysis.py
 def _plot_summary_heatmap(results_df: pd.DataFrame, output_path: Path) -> None:
     if results_df.empty:
         return
 
     # Stage 1: mean within each (function_name, noise, regularization_state)
     function_level = (
-        results_df.groupby(["function_name", "noise", "regularization_state"], as_index=False)[AUROC_COLUMN]
+        results_df.groupby(["function_name", "noise", "regularization_state"], as_index=False)[AUPRC_COLUMN]
         .mean()
-        .rename(columns={AUROC_COLUMN: "function_mean_auroc"})
+        .rename(columns={AUPRC_COLUMN: "function_mean_auroc"})
     )
 
     # Stage 2: mean across functions, grouped by (noise, regularization_state)
@@ -1330,9 +1349,9 @@ def _plot_summary_heatmap(results_df: pd.DataFrame, output_path: Path) -> None:
     _ensure_parent(output_path)
 
     fig, ax = plt.subplots(figsize=(7.0, 3.5))
-    im = _plot_heatmap(ax, matrix, "Mean AUROC by Noise and Regularisation (all functions)")
+    im = _plot_heatmap(ax, matrix, "Mean AUPRC by Noise and Regularisation (all functions)")
     cbar = fig.colorbar(im, ax=ax, shrink=0.8)
-    cbar.set_label("Mean AUROC")
+    cbar.set_label("Mean AUPRC")
     fig.tight_layout()
     _save_pgf(fig, output_path)
     plt.close(fig)
@@ -1346,6 +1365,12 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     # Set up style once at the beginning for all plots
     _setup_thesis_style()
 
+    auprc_random_baseline = (
+        float(results_df["num_gt"].mean()) / 1013
+        if "num_gt" in results_df.columns and results_df["num_gt"].notna().any()
+        else 0.0
+    )
+
     _plot_evaluation_space_comparison(results_df, output_dir / "evaluation_space_comparison.pgf")
 
     noise_summary = _function_level_summary(results_df, ["model_size", "noise"])
@@ -1353,8 +1378,9 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         noise_summary,
         x_col="noise",
         x_order=NOISE_ORDER,
-        title="Effect of Noise on Average AUROC",
+        title="Effect of Noise on Average AUPRC",
         output_path=output_dir / "noise_effect_by_model_size.pgf",
+        auprc_random_baseline=auprc_random_baseline,
     )
 
     reg_summary = _function_level_summary(results_df, ["model_size", "regularization_state"])
@@ -1362,15 +1388,16 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         reg_summary,
         x_col="regularization_state",
         x_order=REGULARIZATION_ORDER,
-        title="Effect of Regularisation on Average AUROC",
+        title="Effect of Regularisation on Average AUPRC",
         output_path=output_dir / "regularization_effect_by_model_size.pgf",
+        auprc_random_baseline=auprc_random_baseline,
     )
 
-    _plot_architecture_x_regularization(results_df, output_dir / "architecture_x_regularization.pgf")
+    _plot_architecture_x_regularization(results_df, output_dir / "architecture_x_regularization.pgf", auprc_random_baseline=auprc_random_baseline)
 
-    _plot_auroc_vs_val_loss_scatter(results_df, output_dir / "auroc_vs_validation_loss.pgf")
+    _plot_auroc_vs_val_loss_scatter(results_df, output_dir / "auroc_vs_validation_loss.pgf", auprc_random_baseline=auprc_random_baseline)
 
-    _plot_auroc_by_interaction_order(results_df, output_dir / "auroc_by_interaction_order.pgf")
+    _plot_auroc_by_interaction_order(results_df, output_dir / "auroc_by_interaction_order.pgf", auprc_random_baseline=auprc_random_baseline)
 
     _plot_interaction_recovery_trajectories(
         trajectories_dir,
@@ -1394,9 +1421,9 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     comparison_df = results_df[results_df["function_name"].isin(COMPARISON_FUNCTIONS)].copy()
     if not comparison_df.empty:
         comparison_summary = (
-            comparison_df.groupby(["function_name", "model_size"], as_index=False)[AUROC_COLUMN]
+            comparison_df.groupby(["function_name", "model_size"], as_index=False)[AUPRC_COLUMN]
             .mean()
-            .pivot(index="function_name", columns="model_size", values="auroc")
+            .pivot(index="function_name", columns="model_size", values=AUPRC_COLUMN)
             .reset_index()
         )
         comparison_summary = comparison_summary.dropna(subset=["small", "big"], how="any")
@@ -1427,8 +1454,8 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         im = _plot_heatmap(axes[0], small_matrix, f"{function_name} - Small")
         _plot_heatmap(axes[1], big_matrix, f"{function_name} - Big")
         cbar = fig.colorbar(im, ax=axes, shrink=0.85, pad=0.02)
-        cbar.set_label("Mean AUROC")
-        fig.suptitle(f"{function_name}: AUROC Heatmap by Noise and Regularisation", y=0.98)
+        cbar.set_label("Mean AUPRC")
+        fig.suptitle(f"{function_name}: AUPRC Heatmap by Noise and Regularisation", y=0.98)
         _save_pgf(fig, heatmap_dir / f"{function_name}_heatmap_big_vs_small.pgf")
         plt.close(fig)
 
