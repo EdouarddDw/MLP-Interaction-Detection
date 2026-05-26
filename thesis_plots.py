@@ -612,12 +612,21 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     if not trajectories_dir.exists() or not trajectories_dir.is_dir():
         return
 
-    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv"))
+    # Collect trajectory files from model-size subdirs, falling back to flat layout
+    trajectory_files: list[tuple[str, Path]] = []
+    for subdir_name in ("small", "big"):
+        subdir = trajectories_dir / subdir_name
+        if subdir.exists():
+            for p in sorted(subdir.glob("*_trajectory.csv")):
+                trajectory_files.append((subdir_name, p))
+    if not trajectory_files:
+        for p in sorted(trajectories_dir.glob("*_trajectory.csv")):
+            trajectory_files.append(("unknown", p))
     if not trajectory_files:
         return
 
     frames: list[pd.DataFrame] = []
-    for path in trajectory_files:
+    for model_size, path in trajectory_files:
         # auroc column in trajectory CSVs is restricted (G∪D) — see analyze_trajectory in analysis.py
         frame = pd.read_csv(path)
         if frame.empty:
@@ -627,6 +636,8 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
             frame = frame.rename(columns={"function": "function_name"})
         if "experiment_name" not in frame.columns and "experiment" in frame.columns:
             frame = frame.rename(columns={"experiment": "experiment_name"})
+        if "model_size" not in frame.columns:
+            frame["model_size"] = model_size
         frames.append(frame)
 
     if not frames:
@@ -770,19 +781,25 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
 
 
 def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
+    _EMPTY_COLS = ["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc", "model_size"]
     if not trajectories_dir.exists() or not trajectories_dir.is_dir():
-        return pd.DataFrame(
-            columns=["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc"]
-        )
+        return pd.DataFrame(columns=_EMPTY_COLS)
 
-    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv"))
+    # Collect trajectory files from model-size subdirs, falling back to flat layout
+    trajectory_files: list[tuple[str, Path]] = []
+    for subdir_name in ("small", "big"):
+        subdir = trajectories_dir / subdir_name
+        if subdir.exists():
+            for p in sorted(subdir.glob("*_trajectory.csv")):
+                trajectory_files.append((subdir_name, p))
     if not trajectory_files:
-        return pd.DataFrame(
-            columns=["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc"]
-        )
+        for p in sorted(trajectories_dir.glob("*_trajectory.csv")):
+            trajectory_files.append(("unknown", p))
+    if not trajectory_files:
+        return pd.DataFrame(columns=_EMPTY_COLS)
 
     rows = []
-    for path in trajectory_files:
+    for model_size, path in trajectory_files:
         frame = pd.read_csv(path)
         if frame.empty or "auroc" not in frame.columns or "epoch" not in frame.columns:
             continue
@@ -817,6 +834,7 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
         if regularization_state not in REGULARIZATION_ORDER:
             continue
 
+        row_model_size = peak_row["model_size"] if "model_size" in frame.columns else model_size
         rows.append(
             {
                 "function": peak_row["function"],
@@ -825,13 +843,12 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
                 "regularization_state": regularization_state,
                 "peak_auroc_epoch": int(float(peak_row["epoch"])),
                 "peak_auroc": float(peak_row["auroc"]),
+                "model_size": row_model_size,
             }
         )
 
     if not rows:
-        return pd.DataFrame(
-            columns=["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc"]
-        )
+        return pd.DataFrame(columns=_EMPTY_COLS)
 
     return pd.DataFrame(rows)
 
