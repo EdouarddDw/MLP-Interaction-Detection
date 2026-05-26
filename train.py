@@ -24,7 +24,7 @@ device = torch.device(
 
 # basic parameters: --------------------------
 set_seed = 42
-l2_const_set = 0.10
+l2_const_set = 1e-4 
 dropout_rate = 0.2
 learning_rate_set = 0.01
 n_epochs_set = 100
@@ -310,8 +310,13 @@ def _parse_hidden_units(hidden_units_str):
     return units
 
 
-def run_experiments(num_samples=30000, hidden_units=None, run_id=None):
+def run_experiments(num_samples=30000, hidden_units=None, run_id=None,
+                    weight_decay_only=False, l2_const=None):
     torch.manual_seed(set_seed)
+
+    if l2_const is not None:
+        import train as _train_module
+        _train_module.l2_const_set = l2_const
 
     # create a run id (timestamp + short uuid) if not provided
     if run_id is None:
@@ -321,8 +326,36 @@ def run_experiments(num_samples=30000, hidden_units=None, run_id=None):
     if hidden_units is None:
         hidden_units = base_parameters.get("hidden_units", [64, 64])
 
+    experiments_to_run = EXPERIMENTS
+    if weight_decay_only:
+        experiments_to_run = [e for e in EXPERIMENTS if e.get("weight_decay", False)]
+
+    sep = "═" * 56
+    n_funcs = len(functions)
+    n_total_exp = len(EXPERIMENTS)
+    n_run_exp = len(experiments_to_run)
+    exp_str = (
+        f"{n_run_exp} / {n_total_exp}  (weight-decay-only filter active)"
+        if weight_decay_only
+        else str(n_run_exp)
+    )
+    l2_str = (
+        f"{l2_const}  (overridden from default {l2_const_set:.2e})"
+        if l2_const is not None
+        else f"default ({l2_const_set:.2e})"
+    )
+    print(sep)
+    print("Training run")
+    print(f"Functions:      {n_funcs}")
+    print(f"Experiments:    {exp_str}")
+    print(f"L2 constant:    {l2_str}")
+    print(f"Hidden units:   {hidden_units}")
+    print(f"Snapshots root: snapshots/")
+    print(f"Run ID:         {run_id}")
+    print(sep)
+
     for f in functions:
-        for e in EXPERIMENTS:
+        for e in experiments_to_run:
             function_name = f.__name__
             experiment_name = e.get("name", "unnamed_experiment")
             print(f"Running function={function_name} with experiment={experiment_name}")
@@ -380,6 +413,19 @@ if __name__ == "__main__":
         help="Hidden layer sizes as comma-separated ints or bracketed list, e.g. '64,64' or '[64,64]'",
     )
 
+    parser.add_argument(
+        "--weight-decay-only",
+        action="store_true",
+        help="Only run experiments where weight_decay=True. Skips all non-weight-decay experiments.",
+    )
+    parser.add_argument(
+        "--l2-const",
+        type=float,
+        default=None,
+        help="Override the L2 regularization constant (default: uses l2_const_set=1e-4 from source). "
+             "Recommended values: 1e-4 (weak), 1e-3 (moderate), 1e-2 (strong).",
+    )
+
     args = parser.parse_args()
 
     try:
@@ -388,4 +434,9 @@ if __name__ == "__main__":
         print(f"Error parsing --hidden_units: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    run_experiments(num_samples=args.num_samples, hidden_units=parsed_hidden)
+    run_experiments(
+        num_samples=args.num_samples,
+        hidden_units=parsed_hidden,
+        weight_decay_only=args.weight_decay_only,
+        l2_const=args.l2_const,
+    )
