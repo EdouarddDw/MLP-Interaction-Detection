@@ -15,7 +15,7 @@ from multilayer_perceptron import MLP, get_weights
 from synth import functions
 from train import make_data_loaders
 from config import EXPERIMENTS
-## add missing interactions to NID subset 
+## add missing interactions to NID subset
 
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -25,12 +25,12 @@ device = torch.device(
 def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
     """
     Load a trained model from checkpoint and extract NID interactions.
-    
+
     Args:
         snapshot_path: Path to best_epoch_XXXX.pt checkpoint
         num_features: Number of input features (default 10)
         dropout: Dropout rate (should match the training configuration)
-    
+
     Returns:
         tuple: (model, nid_interactions, best_loss, epoch)
             - model: loaded MLP model
@@ -40,14 +40,14 @@ def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
     """
     if not Path(snapshot_path).exists():
         return None, None, None, None
-    
+
     checkpoint = torch.load(snapshot_path, map_location=device)
-    
+
     # Infer hidden_units from run_info.json if available (next to checkpoint in same dir)
     snapshot_dir = Path(snapshot_path).parent
     run_info_path = snapshot_dir / "run_info.json"
     hidden_units = [64, 64]  # fallback default
-    
+
     if run_info_path.exists():
         try:
             with open(run_info_path) as f:
@@ -56,7 +56,7 @@ def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
                     hidden_units = run_info["hidden_units"]
         except Exception:
             pass  # Use fallback
-    
+
     # Reconstruct model with correct architecture and dropout
     model = MLP(
         num_features=num_features,
@@ -65,30 +65,30 @@ def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
         main_effect_net_units=[10, 10, 10],
         dropout=dropout,
     ).to(device)
-    
+
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
-    
+
     # Extract interactions using NID
     weights = get_weights(model)
     if not weights:  # Empty weights means no interaction_mlp layer
         return model, [], checkpoint.get("val_loss", float("inf")), checkpoint.get("epoch", -1)
-    
+
     nid_interactions = get_interactions(weights, pairwise=False, one_indexed=False)
-    
+
     return model, nid_interactions, checkpoint.get("val_loss", float("inf")), checkpoint.get("epoch", -1)
 
 
 def get_ground_truth_interactions(function, num_samples=30000, noise=0.0, seed=42):
     """
     Get ground truth interactions for a given function.
-    
+
     Args:
         function: Function from synth.py (e.g., f1, f2, ...)
         num_samples: Number of samples to generate
         noise: Noise level (for data generation, but GT is noise-independent)
         seed: Random seed
-    
+
     Returns:
         set of frozensets: Ground truth interactions (1-indexed, as frozensets for hashability)
     """
@@ -129,6 +129,74 @@ def _is_numeric(value):
     return isinstance(value, (int, float, np.integer, np.floating))
 
 
+def _hidden_units_to_model_size(hidden_units) -> str:
+    if hidden_units == [64, 64]:
+        return "small"
+    if hidden_units == [140, 100, 60, 20]:
+        return "big"
+    return "unknown"
+
+
+def _read_run_info(exp_dir: Path, run_id: Optional[str] = None) -> Optional[dict]:
+    """Read run_info.json from exp_dir or its run_id subdirectory."""
+    path = exp_dir / "run_info.json"
+    if path.exists():
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    if run_id:
+        path = exp_dir / run_id / "run_info.json"
+        if path.exists():
+            try:
+                with open(path) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+
+    if exp_dir.exists():
+        candidates = []
+        for p in exp_dir.iterdir():
+            if p.is_dir():
+                ri_path = p / "run_info.json"
+                if ri_path.exists():
+                    candidates.append((ri_path.stat().st_mtime, ri_path))
+        if candidates:
+            candidates.sort(reverse=True)
+            try:
+                with open(candidates[0][1]) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+
+    return None
+
+
+def _experiment_settings_from_run_info(run_info: Optional[dict], experiment_name: str) -> dict:
+    """Extract experiment settings from run_info.json, falling back to EXPERIMENTS lookup."""
+    if run_info and "experiment_settings" in run_info:
+        es = run_info["experiment_settings"]
+        return {
+            "name": es.get("name", experiment_name),
+            "noise": float(es.get("noise", 0.0)),
+            "optimizer": es.get("optimizer", "adam"),
+            "dropout": float(es.get("dropout", 0.0)),
+            "weight_decay": bool(es.get("weight_decay", False)),
+        }
+    for exp in EXPERIMENTS:
+        if exp.get("name") == experiment_name:
+            return {
+                "name": exp["name"],
+                "noise": float(exp.get("noise", 0.0)),
+                "optimizer": exp.get("optimizer", "adam"),
+                "dropout": float(exp.get("dropout", 0.0)),
+                "weight_decay": bool(exp.get("weight_decay", False)),
+            }
+    return {"name": experiment_name, "noise": 0.0, "optimizer": "adam", "dropout": 0.0, "weight_decay": False}
+
+
 def _normalize_gt_interactions(gt_interactions):
     normalized = []
     for interaction in gt_interactions:
@@ -153,11 +221,11 @@ def is_exact_or_superset(nid_tuple, gt_set):
     """
     Check if NID-detected interaction is exact match or superset of GT interaction.
     NID indices are 0-indexed; GT sets are 1-indexed.
-    
+
     Args:
         nid_tuple: 0-indexed tuple from NID (e.g., (0, 1, 2))
         gt_set: 1-indexed frozenset from GT (e.g., frozenset({1, 2, 3}))
-    
+
     Returns:
         bool: True if NID detection is exact match or superset of GT
     """
@@ -170,11 +238,11 @@ def is_exact_match(nid_tuple, gt_set):
     """
     Check if NID-detected interaction exactly matches GT interaction.
     NID indices are 0-indexed; GT sets are 1-indexed.
-    
+
     Args:
         nid_tuple: 0-indexed tuple from NID (e.g., (0, 1, 2))
         gt_set: 1-indexed frozenset from GT (e.g., frozenset({1, 2, 3}))
-    
+
     Returns:
         bool: True if NID detection exactly equals GT
     """
@@ -291,19 +359,19 @@ def match_interactions_one_to_one(gt_interactions, nid_interactions):
 def compute_auroc_data(gt_interactions, nid_interactions, full_space: bool = False):
     """
     Create binary labels and scores for AUROC computation.
-    
+
     For each GT interaction:
       - Label = 1 (ground truth positive)
       - Score = NID strength if exact match found, else 0
-    
+
     For each unmatched NID detection (not a subset of any GT):
       - Label = 0 (false positive candidate)
       - Score = NID strength
-    
+
     Args:
         gt_interactions: set of frozensets (1-indexed)
         nid_interactions: list of (tuple, strength) pairs (0-indexed)
-    
+
     Returns:
         tuple: (scores, labels) - arrays suitable for sklearn.metrics.roc_auc_score
                Returns None, None if insufficient samples for AUROC
@@ -335,30 +403,30 @@ def compute_auroc_data(gt_interactions, nid_interactions, full_space: bool = Fal
 
     scores = []
     labels = []
-    
+
     # Track which NID detections matched a GT interaction
     matched_nid_indices = set()
-    
+
     # Process each GT interaction
     for gt_inter in gt_interactions:
         best_score = 0.0
         best_idx = None
-        
+
         # Find exact matching NID detection only
         for idx, (nid_tuple, strength) in enumerate(nid_interactions):
             if is_exact_match(nid_tuple, gt_inter):
                 if strength > best_score:
                     best_score = strength
                     best_idx = idx
-        
+
         # Add this GT as a positive sample
         scores.append(best_score)
         labels.append(1)
-        
+
         # Mark matched NID detection
         if best_idx is not None:
             matched_nid_indices.add(best_idx)
-    
+
     # Process unmatched NID detections
     for idx, (nid_tuple, strength) in enumerate(nid_interactions):
         if idx not in matched_nid_indices:
@@ -366,79 +434,132 @@ def compute_auroc_data(gt_interactions, nid_interactions, full_space: bool = Fal
             # (if so, it's "covered" and should be excluded from negatives)
             nid_set = frozenset(i + 1 for i in nid_tuple)
             is_subset_of_gt = any(nid_set < gt_inter for gt_inter in gt_interactions)
-            
+
             if not is_subset_of_gt:
                 # This is a detection that doesn't match any GT (false positive candidate)
                 scores.append(strength)
                 labels.append(0)
-    
+
     if len(labels) < 2:
         # Need at least 2 samples for AUROC
         return None, None
-    
+
     return np.array(scores), np.array(labels)
+
+
+def compute_auprc(scores, labels) -> float | None:
+    """
+    Compute Area Under the Precision-Recall Curve using the trapezoid method.
+
+    The baseline random classifier AUPRC equals the prevalence of positives
+    (n_pos / (n_pos + n_neg)).
+
+    Ties are handled by grouping equal scores and computing precision/recall at
+    the group boundary. The curve is closed with a (precision=1, recall=0) point
+    at the start and a (precision=prevalence, recall=1) point at the end.
+
+    Returns None if there are no positives or no negatives.
+    """
+    scores = np.asarray(scores, dtype=np.float64)
+    labels = np.asarray(labels, dtype=np.int32)
+
+    n_pos = int(np.sum(labels == 1))
+    n_neg = int(np.sum(labels == 0))
+
+    if n_pos == 0 or n_neg == 0:
+        return None
+
+    order = np.argsort(-scores)
+    sorted_labels = labels[order]
+    sorted_scores = scores[order]
+
+    precision_points = [1.0]
+    recall_points = [0.0]
+
+    tp = 0
+    fp = 0
+    i = 0
+    n = len(sorted_labels)
+
+    while i < n:
+        j = i
+        while j < n and sorted_scores[j] == sorted_scores[i]:
+            j += 1
+        tp += int(np.sum(sorted_labels[i:j] == 1))
+        fp += int(np.sum(sorted_labels[i:j] == 0))
+        precision_points.append(tp / (tp + fp))
+        recall_points.append(tp / n_pos)
+        i = j
+
+    if recall_points[-1] < 1.0:
+        prevalence = n_pos / (n_pos + n_neg)
+        precision_points.append(prevalence)
+        recall_points.append(1.0)
+
+    _trapz = getattr(np, "trapezoid", None) or np.trapz
+    return float(_trapz(precision_points, recall_points))
 
 
 def compute_metrics(scores, labels):
     """
     Compute AUROC, precision, and recall using numpy (no sklearn dependency).
-    
+
     Args:
         scores: array of model scores/probabilities
         labels: array of binary labels (0 or 1)
-    
+
     Returns:
         dict: {'auroc': float, 'precision': float, 'recall': float}
               Returns None values if metrics cannot be computed
     """
     if scores is None or len(np.unique(labels)) < 2:
-        return {"auroc": None, "precision": None, "recall": None}
-    
+        return {"auroc": None, "precision": None, "recall": None, "auprc": None}
+
     metrics = {}
-    
+
     # Compute AUROC using concordant pairs method (rank-based)
     try:
         scores = np.asarray(scores, dtype=np.float64)
         labels = np.asarray(labels, dtype=np.int32)
-        
+
         n_pos = np.sum(labels == 1)
         n_neg = np.sum(labels == 0)
-        
+
         if n_pos == 0 or n_neg == 0:
             metrics["auroc"] = None
         else:
             # Count pairs where positive score > negative score
             pos_scores = scores[labels == 1]
             neg_scores = scores[labels == 0]
-            
+
             concordant = 0.0
             for pos_score in pos_scores:
                 concordant += np.sum(pos_score > neg_scores)
-            
+
             # Handle ties: give half credit for ties
             for pos_score in pos_scores:
                 concordant += 0.5 * np.sum(pos_score == neg_scores)
-            
+
             # AUROC = concordant_pairs / total_pairs
             auroc = concordant / (n_pos * n_neg)
             metrics["auroc"] = float(auroc)
     except Exception as e:
         metrics["auroc"] = None
-    
+
     # Compute Precision (TP / (TP + FP))
     try:
         scores = np.asarray(scores, dtype=np.float64)
         labels = np.asarray(labels, dtype=np.int32)
-        
+
         # Use mean score as threshold
         threshold = np.mean(scores)
         predictions = (scores > threshold).astype(int)
-        
+
         # If all predictions are same, try percentile
         if len(np.unique(predictions)) < 2:
             threshold = np.percentile(scores, 50)
             predictions = (scores > threshold).astype(int)
-        
+
         if len(np.unique(predictions)) < 2:
             metrics["precision"] = None
         else:
@@ -448,19 +569,19 @@ def compute_metrics(scores, labels):
             metrics["precision"] = float(precision)
     except Exception as e:
         metrics["precision"] = None
-    
+
     # Compute Recall (TP / (TP + FN))
     try:
         scores = np.asarray(scores, dtype=np.float64)
         labels = np.asarray(labels, dtype=np.int32)
-        
+
         threshold = np.mean(scores)
         predictions = (scores > threshold).astype(int)
-        
+
         if len(np.unique(predictions)) < 2:
             threshold = np.percentile(scores, 50)
             predictions = (scores > threshold).astype(int)
-        
+
         if len(np.unique(predictions)) < 2:
             metrics["recall"] = None
         else:
@@ -470,7 +591,13 @@ def compute_metrics(scores, labels):
             metrics["recall"] = float(recall)
     except Exception as e:
         metrics["recall"] = None
-    
+
+    # Compute AUPRC
+    try:
+        metrics["auprc"] = compute_auprc(scores, labels)
+    except Exception:
+        metrics["auprc"] = None
+
     return metrics
 
 
@@ -506,9 +633,11 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
         "auroc": None,
         "precision": None,
         "recall": None,
+        "auprc": None,
         "auroc_full": None,
         "precision_full": None,
         "recall_full": None,
+        "auprc_full": None,
         "num_gt": 0,
         "num_detected": 0,
         "num_exact_matched": 0,
@@ -519,7 +648,7 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
         "val_loss": float("inf"),
         "success": False,
     }
-    
+
     try:
         # Find best epoch checkpoint. Support optional run_id selection.
         snapshot_dir = Path(snapshot_root) / function_name / experiment_name
@@ -555,30 +684,32 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
         # Load model and NID interactions with correct dropout setting
         dropout_value = experiment_settings.get("dropout", 0.0)
         model, nid_interactions, val_loss, epoch = load_model_and_interactions(best_epoch_file, dropout=dropout_value)
-        
+
         if model is None or nid_interactions is None:
             return result
-        
+
         # Get ground truth interactions
         gt_interactions = get_ground_truth_interactions(function, num_samples, noise, seed)
 
         # Compute one-to-one matching metrics regardless of whether AUROC can be formed.
         matching = match_interactions_one_to_one(gt_interactions, nid_interactions)
-        
+
         # Compute both restricted (G∪D) and full-space (2^[10]) AUROC data.
         scores, labels = compute_auroc_data(gt_interactions, nid_interactions)
         full_scores, full_labels = compute_auroc_data(gt_interactions, nid_interactions, full_space=True)
 
-        metrics = compute_metrics(scores, labels) if scores is not None else {"auroc": None, "precision": None, "recall": None}
-        full_metrics = compute_metrics(full_scores, full_labels) if full_scores is not None else {"auroc": None, "precision": None, "recall": None}
+        metrics = compute_metrics(scores, labels) if scores is not None else {"auroc": None, "precision": None, "recall": None, "auprc": None}
+        full_metrics = compute_metrics(full_scores, full_labels) if full_scores is not None else {"auroc": None, "precision": None, "recall": None, "auprc": None}
 
         result.update({
             "auroc": metrics["auroc"],
             "precision": metrics["precision"],
             "recall": metrics["recall"],
+            "auprc": metrics["auprc"],
             "auroc_full": full_metrics["auroc"],
             "precision_full": full_metrics["precision"],
             "recall_full": full_metrics["recall"],
+            "auprc_full": full_metrics["auprc"],
             "num_gt": len(gt_interactions),
             "num_detected": len(nid_interactions),
             "num_exact_matched": matching["num_exact_matched"],
@@ -589,73 +720,84 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
             "val_loss": val_loss,
             "success": True,
         })
-    
+
     except Exception as e:
         print(f"Error analyzing {function_name}/{experiment_name}: {e}")
         result["error"] = str(e)
-    
+
     return result
 
 
-def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=42, output_dir="results", run_id: Optional[str] = None):
+def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=42, run_id: Optional[str] = None):
     """
-    Analyze all function/experiment combinations.
+    Analyze all experiments by scanning snapshot_root for {function_name}/{experiment_name}/ directories.
 
-    Each output CSV contains both restricted AUROC (auroc) and full-space
-    AUROC (auroc_full) columns in every run.
+    Architecture is determined automatically from run_info.json inside each snapshot directory.
+    Results are saved to results/{model_size}/{function_name}_analysis.csv.
 
     Args:
         snapshot_root: Root directory for snapshots
         num_samples: Number of samples for generating GT data
         seed: Random seed
-        output_dir: Directory to save results CSVs
+        run_id: Optional run_id to prefer when selecting snapshots
 
     Returns:
         dict: Mapping of function_name to list of result dicts
     """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    all_results = {}
-    
-    print(f"Analyzing {len(functions)} functions × {len(EXPERIMENTS)} experiments...")
-    print(f"Results will be saved to {output_dir}/")
-    print()
-    
-    for function in functions:
-        function_name = function.__name__
-        function_results = []
-        
-        print(f"Analyzing {function_name}...")
-        
-        for experiment in EXPERIMENTS:
-            # Allow global run_id override or per-experiment run_id in EXPERIMENTS dict
-            chosen_run_id = run_id if run_id is not None else (experiment.get("run_id") if isinstance(experiment, dict) else None)
+    snapshot_root_path = Path(snapshot_root)
+    if not snapshot_root_path.exists():
+        print(f"Snapshot root {snapshot_root} does not exist.")
+        return {}
 
-            result = analyze_single_experiment(
-                function=function,
-                experiment_settings=experiment,
-                snapshot_root=snapshot_root,
-                num_samples=num_samples,
-                seed=seed,
-                run_id=chosen_run_id,
-            )
-            function_results.append(result)
-            
-            # Print progress
-            status = "✓" if result["success"] else "✗"
-            auroc_str = f"{result['auroc']:.4f}" if result["auroc"] is not None else "N/A"
-            print(f"  [{status}] {experiment['name']:20s} AUROC={auroc_str}")
-        
-        all_results[function_name] = function_results
-        
-        # Save results for this function
-        df = pd.DataFrame(function_results)
-        output_file = output_path / f"{function_name}_analysis.csv"
-        df.to_csv(output_file, index=False)
-        print(f"  → Saved to {output_file}")
-        print()
-    
+    function_map = {f.__name__: f for f in functions}
+
+    # Discover all {function_name}/{experiment_name}/ directories
+    snapshot_dirs = []
+    for func_dir in sorted(snapshot_root_path.iterdir()):
+        if not func_dir.is_dir() or func_dir.name not in function_map:
+            continue
+        for exp_dir in sorted(func_dir.iterdir()):
+            if exp_dir.is_dir():
+                snapshot_dirs.append((func_dir.name, exp_dir.name, exp_dir))
+
+    print(f"Found {len(snapshot_dirs)} snapshot directories under {snapshot_root}")
+    print()
+
+    # (model_size, function_name) → list of result rows
+    grouped: dict = {}
+
+    for function_name, experiment_name, exp_dir in snapshot_dirs:
+        function = function_map[function_name]
+        run_info = _read_run_info(exp_dir, run_id)
+        model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
+        experiment_settings = _experiment_settings_from_run_info(run_info, experiment_name)
+
+        result = analyze_single_experiment(
+            function=function,
+            experiment_settings=experiment_settings,
+            snapshot_root=snapshot_root,
+            num_samples=num_samples,
+            seed=seed,
+            run_id=run_id,
+        )
+        result["model_size"] = model_size
+
+        key = (model_size, function_name)
+        grouped.setdefault(key, []).append(result)
+
+        status = "✓" if result["success"] else "✗"
+        auroc_str = f"{result['auroc']:.4f}" if result["auroc"] is not None else "N/A"
+        print(f"  [{status}] {function_name}/{experiment_name:30s} AUROC={auroc_str}  [{model_size}]")
+
+    all_results: dict = {}
+    for (model_size, function_name), func_results in sorted(grouped.items()):
+        out_dir = Path("results") / model_size
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{function_name}_analysis.csv"
+        pd.DataFrame(func_results).to_csv(out_file, index=False)
+        print(f"  → Saved {len(func_results)} rows to {out_file}")
+        all_results.setdefault(function_name, []).extend(func_results)
+
     return all_results
 
 
@@ -666,14 +808,14 @@ def print_summary(all_results):
     print("\n" + "="*80)
     print("SUMMARY STATISTICS")
     print("="*80)
-    
+
     total_experiments = sum(len(results) for results in all_results.values())
     successful = sum(1 for results in all_results.values() for r in results if r["success"])
-    
+
     print(f"Total experiments: {total_experiments}")
     print(f"Successful analyses: {successful} ({100*successful/total_experiments:.1f}%)")
     print()
-    
+
     def _collect_metric(metric_name):
         values = []
         for results in all_results.values():
@@ -698,11 +840,18 @@ def print_summary(all_results):
     all_aurocs = _collect_metric("auroc")
     _print_metric_stats("AUROC Statistics", all_aurocs)
 
+    print("AUPRC Statistics (restricted G∪D):")
+    print("  Prevalence baseline: varies by function for restricted space")
+    _print_metric_stats("  AUPRC", _collect_metric("auprc"))
+
     print("FULL-SPACE STATISTICS")
     _print_metric_stats("AUROC Full-Space Statistics", _collect_metric("auroc_full"))
     _print_metric_stats("Precision Full-Space Statistics", _collect_metric("precision_full"))
     _print_metric_stats("Recall Full-Space Statistics", _collect_metric("recall_full"))
-    
+    print("AUPRC Full-Space Statistics:")
+    print("  Prevalence baseline: ~0.004 (4 positives / ~1013 candidates)")
+    _print_metric_stats("  AUPRC Full-Space", _collect_metric("auprc_full"))
+
     # Print top performers
     print("Top 10 AUROC performances:")
     top_results = []
@@ -710,7 +859,7 @@ def print_summary(all_results):
         for r in results:
             if r["auroc"] is not None:
                 top_results.append((func_name, r["experiment_name"], r["auroc"]))
-    
+
     top_results.sort(key=lambda x: x[2], reverse=True)
     for i, (func, exp, auroc) in enumerate(top_results[:10], 1):
         print(f"  {i:2d}. {func}/{exp:20s} → AUROC = {auroc:.4f}")
@@ -718,17 +867,29 @@ def print_summary(all_results):
 
 def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots"):
     """
-    Apply NID at every saved epoch checkpoint and return AUROC over time.
-    Returns list of (epoch, auroc) tuples.
+    Apply NID at every saved epoch checkpoint and return AUROC/AUPRC over time.
+    Returns list of dicts with keys: epoch, auroc, auprc.
     """
     function_name = function.__name__
     experiment_name = experiment_settings["name"]
     snapshot_dir = Path(snapshot_root) / function_name / experiment_name
-    
-    # Get all epoch checkpoints (not just best)
+
+    # Find epoch files: first directly in snapshot_dir, then in run_id subdirs
     epoch_files = sorted(snapshot_dir.glob("epoch_*.pt"))
+    if not epoch_files and snapshot_dir.exists():
+        candidates = []
+        for subdir in snapshot_dir.iterdir():
+            if subdir.is_dir():
+                sub_epochs = sorted(subdir.glob("epoch_*.pt"))
+                if sub_epochs:
+                    mtime = max(f.stat().st_mtime for f in sub_epochs)
+                    candidates.append((mtime, sub_epochs))
+        if candidates:
+            candidates.sort(reverse=True)
+            epoch_files = candidates[0][1]
+
     gt = get_ground_truth_interactions(function)
-    
+
     trajectory = []
     for epoch_file in epoch_files:
         m = re.search(r"epoch_(\d{4})\.pt$", epoch_file.name)
@@ -743,52 +904,95 @@ def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots")
         # Restricted evaluation (G∪D) used for trajectory AUROC
         scores, labels = compute_auroc_data(gt, nid_interactions)
         metrics = compute_metrics(scores, labels)
-        trajectory.append({"epoch": epoch, "auroc": metrics["auroc"]})
-    
+        trajectory.append({"epoch": epoch, "auroc": metrics["auroc"], "auprc": metrics["auprc"]})
+
     return trajectory
 
 
-def analyze_all_trajectories(snapshot_root="snapshots", output_dir="results"):
-    """Loop over all functions and experiments and save trajectory CSVs."""
-    output_path = Path(output_dir) / "trajectories"
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    for function in functions:
-        for experiment in EXPERIMENTS:
-            trajectory = analyze_trajectory(function, experiment, snapshot_root)
+def analyze_all_trajectories(snapshot_root="snapshots"):
+    """
+    Scan snapshot_root for all experiment directories and save per-epoch trajectory CSVs.
+
+    Architecture is determined automatically from run_info.json. Trajectories are saved to
+    results/trajectories/{model_size}/{function_name}_{experiment_name}_trajectory.csv.
+    """
+    snapshot_root_path = Path(snapshot_root)
+    if not snapshot_root_path.exists():
+        return
+
+    function_map = {f.__name__: f for f in functions}
+
+    for func_dir in sorted(snapshot_root_path.iterdir()):
+        if not func_dir.is_dir() or func_dir.name not in function_map:
+            continue
+        function = function_map[func_dir.name]
+        function_name = func_dir.name
+
+        for exp_dir in sorted(func_dir.iterdir()):
+            if not exp_dir.is_dir():
+                continue
+            experiment_name = exp_dir.name
+
+            run_info = _read_run_info(exp_dir)
+            model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
+            experiment_settings = _experiment_settings_from_run_info(run_info, experiment_name)
+
+            trajectory = analyze_trajectory(function, experiment_settings, snapshot_root)
             if not trajectory:
                 continue
+
             df = pd.DataFrame(trajectory)
-            df["function"] = function.__name__
-            df["experiment"] = experiment["name"]
-            df["noise"] = experiment["noise"]
-            df["optimizer"] = experiment["optimizer"]
-            df["dropout"] = experiment["dropout"]
-            df["weight_decay"] = experiment["weight_decay"]
-            fname = f"{function.__name__}_{experiment['name']}_trajectory.csv"
-            df.to_csv(output_path / fname, index=False)
+            df["function"] = function_name
+            df["experiment"] = experiment_name
+            df["noise"] = experiment_settings["noise"]
+            df["optimizer"] = experiment_settings["optimizer"]
+            df["dropout"] = experiment_settings["dropout"]
+            df["weight_decay"] = experiment_settings["weight_decay"]
+            df["model_size"] = model_size
+
+            out_dir = Path("results") / "trajectories" / model_size
+            out_dir.mkdir(parents=True, exist_ok=True)
+            fname = f"{function_name}_{experiment_name}_trajectory.csv"
+            df.to_csv(out_dir / fname, index=False)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Analyze snapshots and compute interaction metrics")
+    import shutil
+
+    parser = argparse.ArgumentParser(
+        description="Analyze snapshots and compute interaction metrics for all architectures"
+    )
     parser.add_argument("--snapshot-root", default="snapshots", help="Root folder for snapshots")
     parser.add_argument("--num-samples", type=int, default=30000, help="Number of samples for GT generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--output-dir", default="results", help="Directory to write results CSVs")
     parser.add_argument("--run-id", default=None, help="Optional run_id to select snapshots under each experiment")
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Delete and recreate results/small/, results/big/, results/trajectories/ before running",
+    )
 
     args = parser.parse_args()
+
+    if args.clean:
+        dirs_to_clean = [Path("results/small"), Path("results/big"), Path("results/trajectories")]
+        print("⚠  --clean will delete results/small/, results/big/, results/trajectories/")
+        print("   Press Enter to confirm or Ctrl-C to abort: ", end="", flush=True)
+        input()
+        for d in dirs_to_clean:
+            if d.exists():
+                shutil.rmtree(d)
+                print(f"  Deleted {d}")
+            d.mkdir(parents=True, exist_ok=True)
+            print(f"  Recreated {d}")
+        print()
 
     all_results = analyze_all_experiments(
         snapshot_root=args.snapshot_root,
         num_samples=args.num_samples,
         seed=args.seed,
-        output_dir=args.output_dir,
         run_id=args.run_id,
     )
-    analyze_all_trajectories(
-        snapshot_root=args.snapshot_root,
-        output_dir="results"
-    )
+    analyze_all_trajectories(snapshot_root=args.snapshot_root)
 
     print_summary(all_results)
