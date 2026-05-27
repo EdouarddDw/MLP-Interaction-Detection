@@ -70,6 +70,11 @@ def _collect_files(d: Path) -> list[Path]:
     return sorted(seen)
 
 
+def _experiment_has_weight_decay(exp_dir: Path, experiment_name: str) -> bool:
+    """Return True if '_wd' appears in the experiment directory name."""
+    return "_wd" in experiment_name
+
+
 # ---------------------------------------------------------------------------
 # Source-directory selection
 # ---------------------------------------------------------------------------
@@ -104,7 +109,16 @@ class SelectionResult:
         self.run_id_missing = run_id_missing  # True: --run-id not present here
 
 
-def find_source_dir(exp_dir: Path, run_id: str | None) -> SelectionResult:
+def find_source_dir(exp_dir: Path, run_id: str | None, loose_only: bool = False) -> SelectionResult:
+    # --loose-only: skip all run_id subdir discovery and use only loose files in exp_dir
+    if loose_only:
+        if _has_best_epoch(exp_dir):
+            return SelectionResult(
+                source=exp_dir,
+                reason="loose files (--loose-only)",
+            )
+        return SelectionResult(source=None, reason="no best_epoch_*.pt in exp dir (--loose-only)")
+
     valid = _run_id_subdirs_with_best_epoch(exp_dir)
     has_any_run_id_subdir = bool(valid)
 
@@ -153,7 +167,7 @@ def find_source_dir(exp_dir: Path, run_id: str | None) -> SelectionResult:
 # Main migration
 # ---------------------------------------------------------------------------
 
-def migrate(snapshot_root: Path, output_root: Path, run_id: str | None) -> None:
+def migrate(snapshot_root: Path, output_root: Path, run_id: str | None, loose_only: bool = False, no_weight_decay_only: bool = False, force_model_size: str | None = None) -> None:
     if not snapshot_root.exists():
         print(f"ERROR: snapshot root '{snapshot_root}' does not exist.")
         return
@@ -167,10 +181,36 @@ def migrate(snapshot_root: Path, output_root: Path, run_id: str | None) -> None:
             if exp_dir.is_dir():
                 experiments.append((fn_dir.name, exp_dir.name, exp_dir))
 
+    # Filter to non-weight-decay experiments only when requested
+    filtered_out: list[str] = []
+    if no_weight_decay_only:
+        kept = []
+        for function_name, experiment_name, exp_dir in experiments:
+            if _experiment_has_weight_decay(exp_dir, experiment_name):
+                filtered_out.append(f"{function_name}/{experiment_name}")
+            else:
+                kept.append((function_name, experiment_name, exp_dir))
+        experiments = kept
+
     print(f"Snapshot root : {snapshot_root}")
     print(f"Output root   : {output_root}")
     if run_id:
         print(f"Preferred run-id : {run_id}")
+    active_flags = []
+    if no_weight_decay_only:
+        active_flags.append("--no-weight-decay-only  (filter: _wd not in experiment name; implies loose-only)")
+    if loose_only:
+        active_flags.append("--loose-only  (skip run_id subdirs)")
+    if force_model_size is not None:
+        active_flags.append(f"--force-model-size={force_model_size}  (skip run_info.json arch detection)")
+    if active_flags:
+        print("Active flags  :")
+        for flag in active_flags:
+            print(f"  {flag}")
+    if no_weight_decay_only and filtered_out:
+        print(f"  Filtered out ({len(filtered_out)} weight-decay experiments):")
+        for label in filtered_out:
+            print(f"    {label}")
     print(f"Experiments found: {len(experiments)}")
     print()
 
@@ -195,7 +235,7 @@ def migrate(snapshot_root: Path, output_root: Path, run_id: str | None) -> None:
     for function_name, experiment_name, exp_dir in experiments:
         label = f"{function_name}/{experiment_name}"
 
-        sel = find_source_dir(exp_dir, run_id)
+        sel = find_source_dir(exp_dir, run_id, loose_only=loose_only or no_weight_decay_only)
 
         if sel.run_id_missing:
             run_id_missing_exps.append(label)
@@ -205,23 +245,26 @@ def migrate(snapshot_root: Path, output_root: Path, run_id: str | None) -> None:
             print(row(label, sel.reason, "—", "SKIP", "[SKIP]"))
             continue
 
-        # Read run_info.json for architecture detection
-        run_info = _read_run_info(sel.source)
-        if run_info is None:
-            reason = f"no run_info.json in {sel.source.name}"
-            skipped.append((label, reason))
-            print(row(label, sel.source.name, "—", "SKIP", "[no run_info]"))
-            continue
+        # Determine model_size: use forced value when provided, otherwise detect from run_info.json
+        if force_model_size is not None:
+            model_size = force_model_size
+        else:
+            run_info = _read_run_info(sel.source)
+            if run_info is None:
+                reason = f"no run_info.json in {sel.source.name}"
+                skipped.append((label, reason))
+                print(row(label, sel.source.name, "—", "SKIP", "[no run_info]"))
+                continue
 
-        # Use top-level hidden_units (not experiment_settings.hidden_units,
-        # which can be wrong when --hidden_units was passed to train.py)
-        hidden_units = run_info.get("hidden_units")
-        model_size = _model_size(hidden_units)
-        if model_size is None:
-            reason = f"unknown hidden_units={hidden_units}"
-            skipped.append((label, reason))
-            print(row(label, sel.source.name, "?", "SKIP", f"[hu={hidden_units}]"))
-            continue
+            # Use top-level hidden_units (not experiment_settings.hidden_units,
+            # which can be wrong when --hidden_units was passed to train.py)
+            hidden_units = run_info.get("hidden_units")
+            model_size = _model_size(hidden_units)
+            if model_size is None:
+                reason = f"unknown hidden_units={hidden_units}"
+                skipped.append((label, reason))
+                print(row(label, sel.source.name, "?", "SKIP", f"[hu={hidden_units}]"))
+                continue
 
         # Copy
         dest = output_root / model_size / function_name / experiment_name
@@ -309,12 +352,40 @@ def main() -> None:
         default=None,
         help="Prefer this run_id subdirectory when selecting source files",
     )
+    parser.add_argument(
+        "--loose-only",
+        action="store_true",
+        default=False,
+        help="Only copy loose files directly in each experiment directory; ignore all run_id subdirectories",
+    )
+    parser.add_argument(
+        "--no-weight-decay-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Only migrate experiments where '_wd' does not appear in the experiment directory name. "
+            "Implies loose-only source selection for the included experiments."
+        ),
+    )
+    parser.add_argument(
+        "--force-model-size",
+        choices=["small", "big"],
+        default=None,
+        help=(
+            "Force model_size to this value for all experiments. "
+            "Skips run_info.json architecture detection entirely; "
+            "experiments without run_info.json are not skipped."
+        ),
+    )
     args = parser.parse_args()
 
     migrate(
         snapshot_root=Path(args.snapshot_root),
         output_root=Path(args.output_root),
         run_id=args.run_id,
+        loose_only=args.loose_only,
+        no_weight_decay_only=args.no_weight_decay_only,
+        force_model_size=args.force_model_size,
     )
 
 

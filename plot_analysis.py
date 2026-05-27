@@ -19,7 +19,6 @@ from synth import functions
 from thesis_plots import _save_pgf, _setup_thesis_style
 
 
-SNAPSHOT_ROOT = Path("snapshots")
 RESULTS_DIR = Path("results")
 PLOTS_DIR = RESULTS_DIR / "plots"
 EPOCH_RESULTS_CSV = RESULTS_DIR / "auroc_by_epoch.csv"
@@ -85,7 +84,7 @@ def _get_ground_truth(function, noise: float, num_samples: int, seed: int):
     return get_ground_truth_interactions(function, num_samples=num_samples, noise=noise, seed=seed)
 
 
-def collect_epoch_level_results(snapshot_root=SNAPSHOT_ROOT, num_samples: int = 30000, seed: int = 42) -> pd.DataFrame:
+def collect_epoch_level_results(snapshot_root=Path("snapshots_clean"), num_samples: int = 30000, seed: int = 42) -> pd.DataFrame:
     rows = []
     gt_cache: dict[tuple[str, float, int, int], set[frozenset[int]]] = {}
 
@@ -272,11 +271,22 @@ def generate_plots(results_df: pd.DataFrame, plots_dir: Path = PLOTS_DIR) -> Non
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Compute epoch-level AUROC results and generate summary plots")
+    parser.add_argument(
+        "--snapshot-root",
+        default="snapshots_clean",
+        help="Root folder for snapshots (default: snapshots_clean, the post-migration layout)",
+    )
+    args = parser.parse_args()
+    snapshot_root = Path(args.snapshot_root)
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Collecting epoch-level AUROC results...")
-    results_df = collect_epoch_level_results()
+    print(f"Collecting epoch-level AUROC results from {snapshot_root}...")
+    results_df = collect_epoch_level_results(snapshot_root=snapshot_root)
     print(f"Collected {len(results_df)} checkpoint rows.")
 
     save_epoch_results(results_df)

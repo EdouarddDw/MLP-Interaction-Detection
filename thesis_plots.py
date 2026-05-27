@@ -638,10 +638,16 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     for subdir_name in ("small", "big"):
         subdir = trajectories_dir / subdir_name
         if subdir.exists():
-            for p in sorted(subdir.glob("*_trajectory.csv")):
+            found = sorted(subdir.glob("*_trajectory.csv"))
+            print(f"  [trajectories] {subdir_name}/: {len(found)} file(s)")
+            for p in found:
                 trajectory_files.append((subdir_name, p))
+        else:
+            print(f"  [trajectories] {subdir_name}/: directory not found")
     if not trajectory_files:
-        for p in sorted(trajectories_dir.glob("*_trajectory.csv")):
+        flat_found = sorted(trajectories_dir.glob("*_trajectory.csv"))
+        print(f"  [trajectories] flat fallback: {len(flat_found)} file(s)")
+        for p in flat_found:
             trajectory_files.append(("unknown", p))
     if not trajectory_files:
         return
@@ -783,7 +789,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
                 ax.tick_params(labelleft=False)
                 ax.set_ylabel("")
             else:
-                ax.set_ylabel("AUPRC (restricted, G∪D)")
+                ax.set_ylabel(r"AUPRC (restricted, $\mathcal{G} \cup \mathcal{D}$)")
 
             if col_index == len(REGULARIZATION_ORDER) - 1:
                 ax.text(
@@ -855,6 +861,8 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
         if regularization_state not in REGULARIZATION_ORDER:
             continue
 
+        # Use model_size from the CSV when present; otherwise fall back to the
+        # subdir name (e.g. "small" or "big") that was recorded when the file was collected above.
         row_model_size = peak_row["model_size"] if "model_size" in frame.columns else model_size
         rows.append(
             {
@@ -1193,7 +1201,10 @@ def _plot_evaluation_space_comparison(results_df: pd.DataFrame, output_path: Pat
 
 def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) -> None:
     if not epoch_results_path.exists():
-        warnings.warn(f"Epoch results file not found: {epoch_results_path}")
+        warnings.warn(
+            f"Epoch results file not found: {epoch_results_path}. "
+            "Run `python plot_analysis.py --snapshot-root snapshots_clean` first to generate it."
+        )
         return
 
     # auroc column is restricted (G∪D) — see collect_epoch_level_results in plot_analysis.py

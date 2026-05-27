@@ -1,1080 +1,565 @@
-import csv
-import json
-import itertools
-import torch
+#!/usr/bin/env python3
+"""Run NID on saved checkpoints and export thesis-compatible analysis CSVs."""
+
+from __future__ import annotations
+
+import argparse
+import math
+from itertools import combinations
+from pathlib import Path
+from typing import Any, Iterable
+
 import numpy as np
 import pandas as pd
-import os
-import re
-import argparse
-from typing import Optional, List, Tuple
-from pathlib import Path
+import torch
+from sklearn.metrics import average_precision_score, precision_score, recall_score, roc_auc_score
 
-from NID import get_interactions
-from multilayer_perceptron import MLP, get_weights
-from synth import functions
-from train import make_data_loaders
+import NID
 from config import EXPERIMENTS
-## add missing interactions to NID subset
-
-device = torch.device(
-    "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-)
+from multilayer_perceptron import MLP
+from synth import functions as synth_functions
 
 
-def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0, hidden_units=None):
-    """
-    Load a trained model from checkpoint and extract NID interactions.
-
-    Args:
-        snapshot_path: Path to best_epoch_XXXX.pt checkpoint
-        num_features: Number of input features (default 10)
-        dropout: Dropout rate (should match the training configuration)
-        hidden_units: Hidden layer sizes. When provided, the run_info.json
-            file-system lookup is skipped entirely and this value is used directly.
-
-    Returns:
-        tuple: (model, nid_interactions, best_loss, epoch)
-            - model: loaded MLP model
-            - nid_interactions: list of ((feature_indices), strength) tuples (0-indexed)
-            - best_loss: validation loss at best epoch
-            - epoch: epoch number
-    """
-    if not Path(snapshot_path).exists():
-        return None, None, None, None
-
-    checkpoint = torch.load(snapshot_path, map_location=device)
-
-    # Infer hidden_units from run_info.json only when the caller did not supply it
-    if hidden_units is None:
-        snapshot_dir = Path(snapshot_path).parent
-        run_info_path = snapshot_dir / "run_info.json"
-        hidden_units = [64, 64]  # fallback default
-
-        if run_info_path.exists():
-            try:
-                with open(run_info_path) as f:
-                    run_info = json.load(f)
-                    if "hidden_units" in run_info:
-                        hidden_units = run_info["hidden_units"]
-            except Exception:
-                pass  # Use fallback
-
-    # Reconstruct model with correct architecture and dropout
-    model = MLP(
-        num_features=num_features,
-        hidden_units=hidden_units,
-        use_main_effect_nets=False,
-        main_effect_net_units=[10, 10, 10],
-        dropout=dropout,
-    ).to(device)
-
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    # Extract interactions using NID
-    weights = get_weights(model)
-    if not weights:  # Empty weights means no interaction_mlp layer
-        return model, [], checkpoint.get("val_loss", float("inf")), checkpoint.get("epoch", -1)
-
-    nid_interactions = get_interactions(weights, pairwise=False, one_indexed=False)
-
-    return model, nid_interactions, checkpoint.get("val_loss", float("inf")), checkpoint.get("epoch", -1)
+MODEL_ARCH = {
+    "small": [64, 64],
+    "big": [140, 100, 60, 20],
+}
+NUM_FEATURES = 10
 
 
-def get_ground_truth_interactions(function, num_samples=30000, noise=0.0, seed=42):
-    """
-    Get ground truth interactions for a given function.
-
-    Args:
-        function: Function from synth.py (e.g., f1, f2, ...)
-        num_samples: Number of samples to generate
-        noise: Noise level (for data generation, but GT is noise-independent)
-        seed: Random seed
-
-    Returns:
-        set of frozensets: Ground truth interactions (1-indexed, as frozensets for hashability)
-    """
-    _, _, gt_interactions = function(num_samples=num_samples, seed=seed)
-    # Convert list of sets to set of frozensets for hashability
-    return set(frozenset(inter) for inter in gt_interactions)
+def _all_interactions_one_based(num_features: int = NUM_FEATURES) -> set[tuple[int, ...]]:
+    all_sets: set[tuple[int, ...]] = set()
+    for r in range(2, num_features + 1):
+        all_sets.update(combinations(range(1, num_features + 1), r))
+    return all_sets
 
 
-def _get_best_snapshot_in_dir(candidate_dir: Path) -> Optional[Path]:
-    """Return the best_epoch_*.pt file with the highest epoch number in candidate_dir, or None."""
-    if not candidate_dir.exists() or not candidate_dir.is_dir():
+ALL_CANDIDATES = _all_interactions_one_based(NUM_FEATURES)
+
+
+def _normalize_interaction_key(raw: Any) -> tuple[int, ...] | None:
+    if raw is None:
         return None
-    snaps = list(candidate_dir.glob("best_epoch_*.pt"))
-    if not snaps:
-        return None
-    best = None
-    best_epoch = -1
-    for s in snaps:
-        m = re.search(r"best_epoch_(\d{4})\.pt$", s.name)
-        if m:
-            epoch = int(m.group(1))
-            if epoch > best_epoch:
-                best_epoch = epoch
-                best = s
-    return best
-
-
-def list_available_run_ids(snapshot_root: str, function_name: str, experiment_name: str) -> List[str]:
-    """List run_id subdirectories under a given experiment, if any."""
-    base = Path(snapshot_root) / function_name / experiment_name
-    if not base.exists():
-        return []
-    run_ids = [p.name for p in base.iterdir() if p.is_dir()]
-    return sorted(run_ids)
-
-
-def _is_numeric(value):
-    return isinstance(value, (int, float, np.integer, np.floating))
-
-
-def _hidden_units_to_model_size(hidden_units) -> str:
-    if hidden_units == [64, 64]:
-        return "small"
-    if hidden_units == [140, 100, 60, 20]:
-        return "big"
-    return "unknown"
-
-
-def _read_run_info(exp_dir: Path, run_id: Optional[str] = None) -> Optional[dict]:
-    """Read run_info.json from exp_dir or its run_id subdirectory."""
-    path = exp_dir / "run_info.json"
-    if path.exists():
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped.startswith("(") and stripped.endswith(")"):
+            stripped = stripped[1:-1]
+        if stripped.startswith("{") and stripped.endswith("}"):
+            stripped = stripped[1:-1]
+        if not stripped:
+            return None
+        parts = [p.strip() for p in stripped.split(",") if p.strip()]
         try:
-            with open(path) as f:
-                return json.load(f)
-        except Exception:
-            pass
-
-    if run_id:
-        path = exp_dir / run_id / "run_info.json"
-        if path.exists():
-            try:
-                with open(path) as f:
-                    return json.load(f)
-            except Exception:
-                pass
-
-    if exp_dir.exists():
-        candidates = []
-        for p in exp_dir.iterdir():
-            if p.is_dir():
-                ri_path = p / "run_info.json"
-                if ri_path.exists():
-                    candidates.append((ri_path.stat().st_mtime, ri_path))
-        if candidates:
-            candidates.sort(reverse=True)
-            try:
-                with open(candidates[0][1]) as f:
-                    return json.load(f)
-            except Exception:
-                pass
-
+            vals = [int(p) for p in parts]
+        except ValueError:
+            return None
+        if len(vals) < 2:
+            return None
+        return tuple(sorted(vals))
+    if isinstance(raw, (list, tuple, set, frozenset, np.ndarray)):
+        try:
+            vals = [int(x) for x in list(raw)]
+        except (TypeError, ValueError):
+            return None
+        if len(vals) < 2:
+            return None
+        return tuple(sorted(vals))
     return None
 
 
-def _experiment_settings_from_run_info(run_info: Optional[dict], experiment_name: str) -> dict:
-    """Extract experiment settings from run_info.json, falling back to EXPERIMENTS lookup."""
-    if run_info and "experiment_settings" in run_info:
-        es = run_info["experiment_settings"]
-        return {
-            "name": es.get("name", experiment_name),
-            "noise": float(es.get("noise", 0.0)),
-            "optimizer": es.get("optimizer", "adam"),
-            "dropout": float(es.get("dropout", 0.0)),
-            "weight_decay": bool(es.get("weight_decay", False)),
-        }
-    for exp in EXPERIMENTS:
-        if exp.get("name") == experiment_name:
-            return {
-                "name": exp["name"],
-                "noise": float(exp.get("noise", 0.0)),
-                "optimizer": exp.get("optimizer", "adam"),
-                "dropout": float(exp.get("dropout", 0.0)),
-                "weight_decay": bool(exp.get("weight_decay", False)),
-            }
-    return {"name": experiment_name, "noise": 0.0, "optimizer": "adam", "dropout": 0.0, "weight_decay": False}
+def _looks_zero_indexed(interactions: Iterable[tuple[int, ...]]) -> bool:
+    seen = list(interactions)
+    if not seen:
+        return False
+    min_val = min(min(i) for i in seen)
+    max_val = max(max(i) for i in seen)
+    return min_val == 0 and max_val <= NUM_FEATURES - 1
 
 
-def _normalize_gt_interactions(gt_interactions):
-    normalized = []
-    for interaction in gt_interactions:
-        normalized.append(frozenset(int(feature) for feature in interaction))
-    return normalized
+def _normalize_ground_truth(raw_gt: Any) -> set[tuple[int, ...]]:
+    norm: set[tuple[int, ...]] = set()
+    if raw_gt is None:
+        return norm
+    if isinstance(raw_gt, dict):
+        iterable = raw_gt.keys()
+    else:
+        iterable = raw_gt
+    for item in iterable:
+        key = _normalize_interaction_key(item)
+        if key is not None and len(key) >= 2:
+            norm.add(key)
+    if _looks_zero_indexed(norm):
+        norm = {tuple(v + 1 for v in inter) for inter in norm}
+    return norm
 
 
-def _normalize_nid_interactions(nid_interactions):
-    normalized = []
-    for interaction in nid_interactions:
-        if isinstance(interaction, tuple) and len(interaction) == 2 and _is_numeric(interaction[1]):
-            features, strength = interaction
-            feature_set = frozenset(int(feature) + 1 for feature in features)
-            normalized.append((feature_set, float(strength)))
-        else:
-            feature_set = frozenset(int(feature) for feature in interaction)
-            normalized.append((feature_set, 1.0))
-    return normalized
+def get_ground_truth_interactions(function, num_samples: int = 30000, noise: float = 0.0, seed: int = 42) -> set[frozenset[int]]:
+    _, _, gt = function(num_samples=num_samples, seed=seed)
+    normalized = _normalize_ground_truth(gt)
+    return {frozenset(i) for i in normalized}
 
 
-def is_exact_or_superset(nid_tuple, gt_set):
-    """
-    Check if NID-detected interaction is exact match or superset of GT interaction.
-    NID indices are 0-indexed; GT sets are 1-indexed.
-
-    Args:
-        nid_tuple: 0-indexed tuple from NID (e.g., (0, 1, 2))
-        gt_set: 1-indexed frozenset from GT (e.g., frozenset({1, 2, 3}))
-
-    Returns:
-        bool: True if NID detection is exact match or superset of GT
-    """
-    # Convert NID 0-indexed tuple to 1-indexed set
-    nid_set = frozenset(i + 1 for i in nid_tuple)
-    return nid_set >= gt_set  # Superset or equal
+def get_ground_truth(function_name: str, num_samples: int = 30000, seed: int = 42) -> set[tuple[int, ...]]:
+    function_map = {f.__name__: f for f in synth_functions}
+    fn = function_map[function_name]
+    _, _, gt = fn(num_samples=num_samples, seed=seed)
+    return _normalize_ground_truth(gt)
 
 
-def is_exact_match(nid_tuple, gt_set):
-    """
-    Check if NID-detected interaction exactly matches GT interaction.
-    NID indices are 0-indexed; GT sets are 1-indexed.
+def normalize_nid_output(nid_output: Any) -> dict[tuple[int, ...], float]:
+    mapping: dict[tuple[int, ...], float] = {}
 
-    Args:
-        nid_tuple: 0-indexed tuple from NID (e.g., (0, 1, 2))
-        gt_set: 1-indexed frozenset from GT (e.g., frozenset({1, 2, 3}))
+    if nid_output is None:
+        return mapping
 
-    Returns:
-        bool: True if NID detection exactly equals GT
-    """
-    # Convert NID 0-indexed tuple to 1-indexed set
-    nid_set = frozenset(i + 1 for i in nid_tuple)
-    return nid_set == gt_set  # Exact match only
-
-
-def match_interactions_one_to_one(gt_interactions, nid_interactions):
-    """
-    Match ground truth interactions to NID-detected interactions using one-to-one matching.
-
-    Each GT interaction and each NID interaction can be used at most once.
-    Exact matches are assigned first.
-    Superset matches are assigned second, preferring the smallest valid superset.
-
-    Parameters
-    ----------
-    gt_interactions : iterable of sets or frozensets
-        Ground truth feature interactions, using 1-indexed feature ids.
-    nid_interactions : iterable
-        Detected NID interactions. This may be either:
-        - iterable of sets/frozensets using 1-indexed feature ids
-        - iterable of tuples like ((0, 1), strength), where detected features are 0-indexed
-
-    Returns
-    -------
-    dict with:
-        num_exact_matched
-        num_superset_matched_unique
-        num_matched
-        matched_pairs
-    """
-    normalized_gt = _normalize_gt_interactions(gt_interactions)
-    normalized_nid = _normalize_nid_interactions(nid_interactions)
-
-    gt_used = [False] * len(normalized_gt)
-    nid_used = [False] * len(normalized_nid)
-    matched_pairs = []
-
-    for gt_index, gt_set in enumerate(normalized_gt):
-        if gt_used[gt_index]:
-            continue
-        for nid_index, (nid_set, strength) in enumerate(normalized_nid):
-            if nid_used[nid_index]:
+    if isinstance(nid_output, pd.DataFrame):
+        cols = {c.lower(): c for c in nid_output.columns}
+        i_col = cols.get("interaction") or cols.get("interactions")
+        s_col = cols.get("score") or cols.get("strength") or cols.get("weight")
+        if i_col is None or s_col is None:
+            return mapping
+        for _, row in nid_output.iterrows():
+            k = _normalize_interaction_key(row[i_col])
+            if k is not None and len(k) >= 2:
+                mapping[k] = float(row[s_col])
+    elif isinstance(nid_output, dict):
+        for k_raw, v in nid_output.items():
+            k = _normalize_interaction_key(k_raw)
+            if k is not None and len(k) >= 2:
+                mapping[k] = float(v)
+    else:
+        for item in nid_output:
+            if isinstance(item, dict):
+                k_raw = item.get("interaction", item.get("interactions"))
+                s_raw = item.get("score", item.get("strength", item.get("weight", 0.0)))
+                k = _normalize_interaction_key(k_raw)
+                if k is not None and len(k) >= 2:
+                    mapping[k] = float(s_raw)
                 continue
-            if nid_set == gt_set:
-                gt_used[gt_index] = True
-                nid_used[nid_index] = True
-                matched_pairs.append(
-                    {
-                        "gt": gt_set,
-                        "nid": nid_set,
-                        "match_type": "exact",
-                        "extra_features": 0,
-                        "strength": strength,
-                    }
-                )
-                break
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                k = _normalize_interaction_key(item[0])
+                if k is not None and len(k) >= 2:
+                    mapping[k] = float(item[1])
 
-    candidate_pairs = []
-    for gt_index, gt_set in enumerate(normalized_gt):
-        if gt_used[gt_index]:
-            continue
-        for nid_index, (nid_set, strength) in enumerate(normalized_nid):
-            if nid_used[nid_index]:
-                continue
-            if nid_set > gt_set:
-                extra_features = len(nid_set) - len(gt_set)
-                candidate_pairs.append(
-                    (
-                        extra_features,
-                        -float(strength),
-                        len(nid_set),
-                        gt_index,
-                        nid_index,
-                    )
-                )
+    if _looks_zero_indexed(mapping.keys()):
+        mapping = {tuple(v + 1 for v in inter): s for inter, s in mapping.items()}
 
-    candidate_pairs.sort()
-
-    for extra_features, neg_strength, _, gt_index, nid_index in candidate_pairs:
-        if gt_used[gt_index] or nid_used[nid_index]:
-            continue
-
-        gt_set = normalized_gt[gt_index]
-        nid_set, strength = normalized_nid[nid_index]
-
-        if nid_set > gt_set:
-            gt_used[gt_index] = True
-            nid_used[nid_index] = True
-            matched_pairs.append(
-                {
-                    "gt": gt_set,
-                    "nid": nid_set,
-                    "match_type": "superset",
-                    "extra_features": extra_features,
-                    "strength": strength,
-                }
-            )
-
-    num_exact_matched = sum(1 for pair in matched_pairs if pair["match_type"] == "exact")
-    num_superset_matched_unique = sum(1 for pair in matched_pairs if pair["match_type"] == "superset")
-    num_matched = len(matched_pairs)
-
-    return {
-        "num_exact_matched": num_exact_matched,
-        "num_superset_matched_unique": num_superset_matched_unique,
-        "num_matched": num_matched,
-        "matched_pairs": matched_pairs,
-    }
+    return {tuple(sorted(k)): float(v) for k, v in mapping.items() if len(k) >= 2}
 
 
-def compute_auroc_data(gt_interactions, nid_interactions, full_space: bool = False):
-    """
-    Create binary labels and scores for AUROC computation.
+def _extract_state_dict(ckpt_obj: Any) -> dict[str, torch.Tensor]:
+    if isinstance(ckpt_obj, dict):
+        if "model_state_dict" in ckpt_obj and isinstance(ckpt_obj["model_state_dict"], dict):
+            return ckpt_obj["model_state_dict"]
+        if "state_dict" in ckpt_obj and isinstance(ckpt_obj["state_dict"], dict):
+            return ckpt_obj["state_dict"]
+        if "model" in ckpt_obj and isinstance(ckpt_obj["model"], dict):
+            return ckpt_obj["model"]
+        if ckpt_obj and all(isinstance(v, torch.Tensor) for v in ckpt_obj.values()):
+            return ckpt_obj
+    raise ValueError("Unsupported checkpoint format for state_dict.")
 
-    For each GT interaction:
-      - Label = 1 (ground truth positive)
-      - Score = NID strength if exact match found, else 0
 
-    For each unmatched NID detection (not a subset of any GT):
-      - Label = 0 (false positive candidate)
-      - Score = NID strength
+def _extract_epoch_val_loss(ckpt_obj: Any, checkpoint_path: Path) -> tuple[int | float, float]:
+    epoch = math.nan
+    val_loss = math.nan
+    if isinstance(ckpt_obj, dict):
+        if "epoch" in ckpt_obj:
+            try:
+                epoch = int(ckpt_obj["epoch"])
+            except Exception:
+                epoch = math.nan
+        if "val_loss" in ckpt_obj:
+            try:
+                val_loss = float(ckpt_obj["val_loss"])
+            except Exception:
+                val_loss = math.nan
+    if isinstance(epoch, float) and math.isnan(epoch):
+        stem = checkpoint_path.stem
+        if stem.startswith("epoch_") or stem.startswith("best_epoch_"):
+            token = stem.split("_")[-1]
+            if token.isdigit():
+                epoch = int(token)
+    return epoch, val_loss
 
-    Args:
-        gt_interactions: set of frozensets (1-indexed)
-        nid_interactions: list of (tuple, strength) pairs (0-indexed)
 
-    Returns:
-        tuple: (scores, labels) - arrays suitable for sklearn.metrics.roc_auc_score
-               Returns None, None if insufficient samples for AUROC
-    """
+def _strip_module_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if not state_dict:
+        return state_dict
+    if all(k.startswith("module.") for k in state_dict.keys()):
+        return {k[len("module.") :]: v for k, v in state_dict.items()}
+    return state_dict
+
+
+def load_model_and_interactions(
+    checkpoint_path: Path,
+    dropout: float = 0.0,
+    model_size: str | None = None,
+) -> tuple[MLP | None, list[tuple[tuple[int, ...], float]] | None, float, int | float]:
+    try:
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+    except Exception:
+        return None, None, math.nan, math.nan
+
+    if model_size is None:
+        parts = {p.lower() for p in checkpoint_path.parts}
+        model_size = "big" if "big" in parts else "small"
+    hidden_units = MODEL_ARCH[model_size]
+
+    try:
+        state_dict = _strip_module_prefix(_extract_state_dict(ckpt))
+        model = MLP(
+            num_features=NUM_FEATURES,
+            hidden_units=hidden_units,
+            use_main_effect_nets=False,
+            main_effect_net_units=[10, 10, 10],
+            dropout=float(dropout),
+        )
+        model.load_state_dict(state_dict, strict=False)
+        model.eval()
+        interactions = NID.get_interactions(NID.get_weights(model), one_indexed=True)
+        val_epoch, val_loss = _extract_epoch_val_loss(ckpt, checkpoint_path)
+        return model, interactions, val_loss, val_epoch
+    except Exception:
+        return None, None, math.nan, math.nan
+
+
+def _is_subset_of_any_gt(candidate: tuple[int, ...], gt_set: set[tuple[int, ...]]) -> bool:
+    s = set(candidate)
+    for gt in gt_set:
+        gt_s = set(gt)
+        if s < gt_s:
+            return True
+    return False
+
+
+def compute_auroc_data(
+    gt_interactions: set[frozenset[int]] | set[tuple[int, ...]],
+    nid_interactions: Any,
+    full_space: bool = False,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    gt = {tuple(sorted(map(int, g))) for g in gt_interactions}
+    nid_map = normalize_nid_output(nid_interactions)
+    detected = set(nid_map.keys())
+
     if full_space:
-        scores = []
-        labels = []
+        candidates = sorted(ALL_CANDIDATES)
+    else:
+        candidates = sorted(gt | detected)
+        candidates = [c for c in candidates if not (c not in gt and _is_subset_of_any_gt(c, gt))]
 
-        gt_set = set(gt_interactions)
-        nid_score_map = {}
-        for nid_tuple, strength in nid_interactions:
-            nid_set = frozenset(i + 1 for i in nid_tuple)
-            if len(nid_set) < 2:
-                continue
-            current_strength = nid_score_map.get(nid_set)
-            if current_strength is None or strength > current_strength:
-                nid_score_map[nid_set] = float(strength)
-
-        for subset_size in range(2, 11):
-            for subset in itertools.combinations(range(1, 11), subset_size):
-                subset_set = frozenset(subset)
-                labels.append(1 if subset_set in gt_set else 0)
-                scores.append(nid_score_map.get(subset_set, 0.0))
-
-        if len(labels) < 2:
-            return None, None
-
-        return np.array(scores), np.array(labels)
-
-    scores = []
-    labels = []
-
-    # Track which NID detections matched a GT interaction
-    matched_nid_indices = set()
-
-    # Process each GT interaction
-    for gt_inter in gt_interactions:
-        best_score = 0.0
-        best_idx = None
-
-        # Find exact matching NID detection only
-        for idx, (nid_tuple, strength) in enumerate(nid_interactions):
-            if is_exact_match(nid_tuple, gt_inter):
-                if strength > best_score:
-                    best_score = strength
-                    best_idx = idx
-
-        # Add this GT as a positive sample
-        scores.append(best_score)
-        labels.append(1)
-
-        # Mark matched NID detection
-        if best_idx is not None:
-            matched_nid_indices.add(best_idx)
-
-    # Process unmatched NID detections
-    for idx, (nid_tuple, strength) in enumerate(nid_interactions):
-        if idx not in matched_nid_indices:
-            # Check if this NID detection is a subset of any GT interaction
-            # (if so, it's "covered" and should be excluded from negatives)
-            nid_set = frozenset(i + 1 for i in nid_tuple)
-            is_subset_of_gt = any(nid_set < gt_inter for gt_inter in gt_interactions)
-
-            if not is_subset_of_gt:
-                # This is a detection that doesn't match any GT (false positive candidate)
-                scores.append(strength)
-                labels.append(0)
-
-    if len(labels) < 2:
-        # Need at least 2 samples for AUROC
+    if not candidates:
         return None, None
 
-    return np.array(scores), np.array(labels)
+    y_true = np.array([1 if c in gt else 0 for c in candidates], dtype=int)
+    y_score = np.array([float(nid_map.get(c, 0.0)) for c in candidates], dtype=float)
+    return y_score, y_true
 
 
-def compute_auprc(scores, labels) -> float | None:
-    """
-    Compute Area Under the Precision-Recall Curve using the trapezoid method.
+def compute_metrics(scores: np.ndarray | None, labels: np.ndarray | None) -> dict[str, float]:
+    if scores is None or labels is None or len(scores) == 0:
+        return {"auroc": math.nan, "precision": math.nan, "recall": math.nan, "auprc": math.nan}
 
-    The baseline random classifier AUPRC equals the prevalence of positives
-    (n_pos / (n_pos + n_neg)).
+    if len(np.unique(labels)) < 2:
+        auroc = math.nan
+    else:
+        auroc = float(roc_auc_score(labels, scores))
 
-    Ties are handled by grouping equal scores and computing precision/recall at
-    the group boundary. The curve is closed with a (precision=1, recall=0) point
-    at the start and a (precision=prevalence, recall=1) point at the end.
+    if np.any(labels == 1):
+        auprc = float(average_precision_score(labels, scores))
+    else:
+        auprc = math.nan
 
-    Returns None if there are no positives or no negatives.
-    """
-    scores = np.asarray(scores, dtype=np.float64)
-    labels = np.asarray(labels, dtype=np.int32)
-
-    n_pos = int(np.sum(labels == 1))
-    n_neg = int(np.sum(labels == 0))
-
-    if n_pos == 0 or n_neg == 0:
-        return None
-
-    order = np.argsort(-scores)
-    sorted_labels = labels[order]
-    sorted_scores = scores[order]
-
-    precision_points = [1.0]
-    recall_points = [0.0]
-
-    tp = 0
-    fp = 0
-    i = 0
-    n = len(sorted_labels)
-
-    while i < n:
-        j = i
-        while j < n and sorted_scores[j] == sorted_scores[i]:
-            j += 1
-        tp += int(np.sum(sorted_labels[i:j] == 1))
-        fp += int(np.sum(sorted_labels[i:j] == 0))
-        precision_points.append(tp / (tp + fp))
-        recall_points.append(tp / n_pos)
-        i = j
-
-    if recall_points[-1] < 1.0:
-        prevalence = n_pos / (n_pos + n_neg)
-        precision_points.append(prevalence)
-        recall_points.append(1.0)
-
-    _trapz = getattr(np, "trapezoid", None) or np.trapz
-    return float(_trapz(precision_points, recall_points))
+    preds = (scores > 0).astype(int)
+    precision = float(precision_score(labels, preds, zero_division=0))
+    recall = float(recall_score(labels, preds, zero_division=0))
+    return {"auroc": auroc, "precision": precision, "recall": recall, "auprc": auprc}
 
 
-def compute_metrics(scores, labels):
-    """
-    Compute AUROC, precision, and recall using numpy (no sklearn dependency).
+def _metric_triplet(gt: set[tuple[int, ...]], nid_map: dict[tuple[int, ...], float]) -> tuple[float, float, float, float]:
+    s_restricted, y_restricted = compute_auroc_data(gt, nid_map, full_space=False)
+    m_restricted = compute_metrics(s_restricted, y_restricted)
 
-    Args:
-        scores: array of model scores/probabilities
-        labels: array of binary labels (0 or 1)
-
-    Returns:
-        dict: {'auroc': float, 'precision': float, 'recall': float}
-              Returns None values if metrics cannot be computed
-    """
-    if scores is None or len(np.unique(labels)) < 2:
-        return {"auroc": None, "precision": None, "recall": None, "auprc": None}
-
-    metrics = {}
-
-    # Compute AUROC using concordant pairs method (rank-based)
-    try:
-        scores = np.asarray(scores, dtype=np.float64)
-        labels = np.asarray(labels, dtype=np.int32)
-
-        n_pos = np.sum(labels == 1)
-        n_neg = np.sum(labels == 0)
-
-        if n_pos == 0 or n_neg == 0:
-            metrics["auroc"] = None
-        else:
-            # Count pairs where positive score > negative score
-            pos_scores = scores[labels == 1]
-            neg_scores = scores[labels == 0]
-
-            concordant = 0.0
-            for pos_score in pos_scores:
-                concordant += np.sum(pos_score > neg_scores)
-
-            # Handle ties: give half credit for ties
-            for pos_score in pos_scores:
-                concordant += 0.5 * np.sum(pos_score == neg_scores)
-
-            # AUROC = concordant_pairs / total_pairs
-            auroc = concordant / (n_pos * n_neg)
-            metrics["auroc"] = float(auroc)
-    except Exception as e:
-        metrics["auroc"] = None
-
-    # Compute Precision (TP / (TP + FP))
-    try:
-        scores = np.asarray(scores, dtype=np.float64)
-        labels = np.asarray(labels, dtype=np.int32)
-
-        # Use mean score as threshold
-        threshold = np.mean(scores)
-        predictions = (scores > threshold).astype(int)
-
-        # If all predictions are same, try percentile
-        if len(np.unique(predictions)) < 2:
-            threshold = np.percentile(scores, 50)
-            predictions = (scores > threshold).astype(int)
-
-        if len(np.unique(predictions)) < 2:
-            metrics["precision"] = None
-        else:
-            tp = np.sum((predictions == 1) & (labels == 1))
-            fp = np.sum((predictions == 1) & (labels == 0))
-            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-            metrics["precision"] = float(precision)
-    except Exception as e:
-        metrics["precision"] = None
-
-    # Compute Recall (TP / (TP + FN))
-    try:
-        scores = np.asarray(scores, dtype=np.float64)
-        labels = np.asarray(labels, dtype=np.int32)
-
-        threshold = np.mean(scores)
-        predictions = (scores > threshold).astype(int)
-
-        if len(np.unique(predictions)) < 2:
-            threshold = np.percentile(scores, 50)
-            predictions = (scores > threshold).astype(int)
-
-        if len(np.unique(predictions)) < 2:
-            metrics["recall"] = None
-        else:
-            tp = np.sum((predictions == 1) & (labels == 1))
-            fn = np.sum((predictions == 0) & (labels == 1))
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-            metrics["recall"] = float(recall)
-    except Exception as e:
-        metrics["recall"] = None
-
-    # Compute AUPRC
-    try:
-        metrics["auprc"] = compute_auprc(scores, labels)
-    except Exception:
-        metrics["auprc"] = None
-
-    return metrics
+    s_full, y_full = compute_auroc_data(gt, nid_map, full_space=True)
+    m_full = compute_metrics(s_full, y_full)
+    return m_restricted["auprc"], m_full["auprc"], m_restricted["auroc"], m_full["auroc"]
 
 
-def analyze_single_experiment(function, experiment_settings, snapshot_root="snapshots", num_samples=30000, seed=42, run_id: Optional[str] = None):
-    """
-    Analyze a single function/experiment combination.
+def _safe_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.lower() in {"1", "true", "yes"}
+    return bool(v)
 
-    Both restricted AUROC (G∪D) and full-space AUROC (2^[10]) are always
-    computed and always present as columns in the output.
 
-    Args:
-        function: Function from synth.py
-        experiment_settings: Dict with keys: name, noise, optimizer, dropout, weight_decay
-        snapshot_root: Root directory for snapshots
-        num_samples: Number of samples for generating GT data
-        seed: Random seed
+def _dedup_experiments_by_name(experiments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for exp in experiments:
+        name = str(exp.get("name", ""))
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(exp)
+    return out
 
-    Returns:
-        dict with keys including auroc, precision, recall (restricted) and
-        auroc_full, precision_full, recall_full (full interaction space).
-    """
-    function_name = function.__name__
-    experiment_name = experiment_settings.get("name", "unknown")
-    noise = experiment_settings.get("noise", 0.0)
 
-    result = {
-        "function_name": function_name,
-        "experiment_name": experiment_name,
-        "noise": noise,
-        "optimizer": experiment_settings.get("optimizer", "unknown"),
-        "dropout": experiment_settings.get("dropout", 0.0),
-        "weight_decay": experiment_settings.get("weight_decay", False),
-        "auroc": None,
-        "precision": None,
-        "recall": None,
-        "auprc": None,
-        "auroc_full": None,
-        "precision_full": None,
-        "recall_full": None,
-        "auprc_full": None,
-        "num_gt": 0,
-        "num_detected": 0,
-        "num_exact_matched": 0,
-        "num_superset_matched_unique": 0,
-        "num_matched": 0,
-        "matched_pairs": [],
-        "best_epoch": -1,
-        "val_loss": float("inf"),
+def _sorted_epoch_checkpoints(exp_dir: Path) -> list[Path]:
+    paths = list(exp_dir.glob("epoch_*.pt"))
+    def key_fn(path: Path) -> int:
+        stem = path.stem
+        token = stem.split("_")[-1]
+        return int(token) if token.isdigit() else -1
+    return sorted(paths, key=key_fn)
+
+
+def _best_checkpoint(exp_dir: Path) -> Path | None:
+    best = sorted(exp_dir.glob("best_epoch_*.pt"))
+    if best:
+        return best[0]
+    epochs = _sorted_epoch_checkpoints(exp_dir)
+    return epochs[-1] if epochs else None
+
+
+def _ensure_dirs(results_root: Path) -> None:
+    (results_root / "small").mkdir(parents=True, exist_ok=True)
+    (results_root / "big").mkdir(parents=True, exist_ok=True)
+    (results_root / "trajectories").mkdir(parents=True, exist_ok=True)
+
+
+def _base_best_row(
+    function_name: str,
+    experiment: dict[str, Any],
+    model_size: str,
+) -> dict[str, Any]:
+    return {
         "success": False,
+        "function_name": function_name,
+        "function": function_name,
+        "experiment": experiment["name"],
+        "noise": float(experiment["noise"]),
+        "optimizer": experiment["optimizer"],
+        "dropout": float(experiment["dropout"]),
+        "weight_decay": _safe_bool(experiment["weight_decay"]),
+        "model_size": model_size,
+        "best_epoch": math.nan,
+        "checkpoint_path": "",
+        "val_loss": math.nan,
+        "auprc_full": math.nan,
+        "auroc": math.nan,
+        "auroc_full": math.nan,
+        "num_gt": math.nan,
+        "num_detected": math.nan,
+        "num_candidates": len(ALL_CANDIDATES),
+        "error": "",
     }
 
-    try:
-        # Find best epoch checkpoint. Support optional run_id selection.
-        snapshot_dir = Path(snapshot_root) / function_name / experiment_name
 
-        candidate_file = None
-
-        # 1) If explicit run_id passed (function arg), look there first
-        if run_id:
-            candidate_file = _get_best_snapshot_in_dir(snapshot_dir / run_id)
-
-        # 2) If not found, look directly under experiment dir
-        if candidate_file is None:
-            candidate_file = _get_best_snapshot_in_dir(snapshot_dir)
-
-        # 3) If still not found, scan run_id subdirectories and pick the most recently modified best snapshot
-        if candidate_file is None and snapshot_dir.exists():
-            candidates = []
-            for p in snapshot_dir.iterdir():
-                if p.is_dir():
-                    best_snap = _get_best_snapshot_in_dir(p)
-                    if best_snap is not None:
-                        candidates.append((best_snap.stat().st_mtime, best_snap))
-            if candidates:
-                candidates.sort(reverse=True)
-                candidate_file = candidates[0][1]
-
-        if candidate_file is None:
-            # No snapshot available for this experiment
-            return result
-
-        best_epoch_file = candidate_file
-
-        # Load model and NID interactions with correct dropout setting
-        dropout_value = experiment_settings.get("dropout", 0.0)
-        model, nid_interactions, val_loss, epoch = load_model_and_interactions(best_epoch_file, dropout=dropout_value)
-
-        if model is None or nid_interactions is None:
-            return result
-
-        # Get ground truth interactions
-        gt_interactions = get_ground_truth_interactions(function, num_samples, noise, seed)
-
-        # Compute one-to-one matching metrics regardless of whether AUROC can be formed.
-        matching = match_interactions_one_to_one(gt_interactions, nid_interactions)
-
-        # Compute both restricted (G∪D) and full-space (2^[10]) AUROC data.
-        scores, labels = compute_auroc_data(gt_interactions, nid_interactions)
-        full_scores, full_labels = compute_auroc_data(gt_interactions, nid_interactions, full_space=True)
-
-        metrics = compute_metrics(scores, labels) if scores is not None else {"auroc": None, "precision": None, "recall": None, "auprc": None}
-        full_metrics = compute_metrics(full_scores, full_labels) if full_scores is not None else {"auroc": None, "precision": None, "recall": None, "auprc": None}
-
-        result.update({
-            "auroc": metrics["auroc"],
-            "precision": metrics["precision"],
-            "recall": metrics["recall"],
-            "auprc": metrics["auprc"],
-            "auroc_full": full_metrics["auroc"],
-            "precision_full": full_metrics["precision"],
-            "recall_full": full_metrics["recall"],
-            "auprc_full": full_metrics["auprc"],
-            "num_gt": len(gt_interactions),
-            "num_detected": len(nid_interactions),
-            "num_exact_matched": matching["num_exact_matched"],
-            "num_superset_matched_unique": matching["num_superset_matched_unique"],
-            "num_matched": matching["num_matched"],
-            "matched_pairs": matching["matched_pairs"],
-            "best_epoch": epoch,
-            "val_loss": val_loss,
-            "success": True,
-        })
-
-    except Exception as e:
-        print(f"Error analyzing {function_name}/{experiment_name}: {e}")
-        result["error"] = str(e)
-
-    return result
+def _base_traj_row(
+    function_name: str,
+    experiment: dict[str, Any],
+    model_size: str,
+) -> dict[str, Any]:
+    return {
+        "epoch": math.nan,
+        "function_name": function_name,
+        "function": function_name,
+        "experiment": experiment["name"],
+        "noise": float(experiment["noise"]),
+        "optimizer": experiment["optimizer"],
+        "dropout": float(experiment["dropout"]),
+        "weight_decay": _safe_bool(experiment["weight_decay"]),
+        "model_size": model_size,
+        "checkpoint_path": "",
+        "val_loss": math.nan,
+        "auprc": math.nan,
+        "auprc_full": math.nan,
+        "auroc": math.nan,
+        "auroc_full": math.nan,
+        "success": False,
+        "error": "",
+    }
 
 
-def analyze_all_experiments(
-    snapshot_root="snapshots",
-    num_samples=30000,
-    seed=42,
-    run_id: Optional[str] = None,
-    model_size_override: Optional[str] = None,
-):
-    """
-    Analyze all experiments by scanning snapshot_root for {function_name}/{experiment_name}/ directories.
+def run_analysis(args: argparse.Namespace) -> None:
+    snapshots_root = Path(args.snapshots_root)
+    results_root = Path(args.results_root)
+    selected_model_sizes = [args.model_size] if args.model_size else ["small", "big"]
+    selected_functions = [args.function] if args.function else [f"f{i}" for i in range(1, 11)]
 
-    Architecture is determined automatically from run_info.json inside each snapshot directory,
-    unless model_size_override is given (e.g. "small" or "big"), in which case that value is
-    used directly and run_info.json is only consulted for experiment settings.
-    Results are saved to results/{model_size}/{function_name}_analysis.csv.
+    experiments = _dedup_experiments_by_name(EXPERIMENTS)
+    if args.experiment:
+        experiments = [e for e in experiments if e["name"] == args.experiment]
+        if not experiments:
+            raise SystemExit(f"Experiment not found in config.EXPERIMENTS: {args.experiment}")
 
-    Args:
-        snapshot_root: Root directory for snapshots
-        num_samples: Number of samples for generating GT data
-        seed: Random seed
-        run_id: Optional run_id to prefer when selecting snapshots
-        model_size_override: When set, skip hidden_units detection and use this model size
+    if not args.dry_run:
+        _ensure_dirs(results_root)
 
-    Returns:
-        dict: Mapping of function_name to list of result dicts
-    """
-    snapshot_root_path = Path(snapshot_root)
-    if not snapshot_root_path.exists():
-        print(f"Snapshot root {snapshot_root} does not exist.")
-        return {}
+    all_epoch_rows: list[dict[str, Any]] = []
 
-    function_map = {f.__name__: f for f in functions}
+    for model_size in selected_model_sizes:
+        for function_name in selected_functions:
+            print(f"[analysis] {model_size}/{function_name}")
+            gt = get_ground_truth(function_name)
+            best_rows: list[dict[str, Any]] = []
 
-    # Discover all {function_name}/{experiment_name}/ directories
-    snapshot_dirs = []
-    for func_dir in sorted(snapshot_root_path.iterdir()):
-        if not func_dir.is_dir() or func_dir.name not in function_map:
-            continue
-        for exp_dir in sorted(func_dir.iterdir()):
-            if exp_dir.is_dir():
-                snapshot_dirs.append((func_dir.name, exp_dir.name, exp_dir))
+            for exp in experiments:
+                exp_name = exp["name"]
+                exp_dir = snapshots_root / model_size / function_name / exp_name
 
-    print(f"Found {len(snapshot_dirs)} snapshot directories under {snapshot_root}")
-    print()
+                best_row = _base_best_row(function_name, exp, model_size)
+                traj_rows: list[dict[str, Any]] = []
 
-    # (model_size, function_name) → list of result rows
-    grouped: dict = {}
+                if not exp_dir.exists():
+                    best_row["error"] = f"Missing experiment directory: {exp_dir}"
+                    if not args.best_only:
+                        error_row = _base_traj_row(function_name, exp, model_size)
+                        error_row["error"] = best_row["error"]
+                        traj_rows.append(error_row)
+                else:
+                    if args.best_only:
+                        checkpoints = [_best_checkpoint(exp_dir)] if _best_checkpoint(exp_dir) else []
+                    else:
+                        checkpoints = _sorted_epoch_checkpoints(exp_dir)
+                        if not checkpoints:
+                            b = _best_checkpoint(exp_dir)
+                            checkpoints = [b] if b else []
 
-    for function_name, experiment_name, exp_dir in snapshot_dirs:
-        function = function_map[function_name]
-        run_info = _read_run_info(exp_dir, run_id)
-        if model_size_override is not None:
-            model_size = model_size_override
+                    if not checkpoints:
+                        best_row["error"] = f"No checkpoints found in {exp_dir}"
+                        if not args.best_only:
+                            error_row = _base_traj_row(function_name, exp, model_size)
+                            error_row["error"] = best_row["error"]
+                            traj_rows.append(error_row)
+                    else:
+                        for ckpt in checkpoints:
+                            model, nid_interactions, val_loss, epoch = load_model_and_interactions(
+                                ckpt,
+                                dropout=float(exp["dropout"]),
+                                model_size=model_size,
+                            )
+                            row = _base_traj_row(function_name, exp, model_size)
+                            row["checkpoint_path"] = str(ckpt)
+                            row["epoch"] = epoch
+                            row["val_loss"] = val_loss
+
+                            if model is None or nid_interactions is None:
+                                row["error"] = f"Failed to load or parse checkpoint: {ckpt}"
+                            else:
+                                nid_map = normalize_nid_output(nid_interactions)
+                                auprc, auprc_full, auroc, auroc_full = _metric_triplet(gt, nid_map)
+                                row.update(
+                                    {
+                                        "success": True,
+                                        "auprc": auprc,
+                                        "auprc_full": auprc_full,
+                                        "auroc": auroc,
+                                        "auroc_full": auroc_full,
+                                    }
+                                )
+                            traj_rows.append(row)
+
+                        best_ckpt = _best_checkpoint(exp_dir)
+                        if best_ckpt is None:
+                            best_row["error"] = f"No best checkpoint found in {exp_dir}"
+                        else:
+                            model, nid_interactions, val_loss, epoch = load_model_and_interactions(
+                                best_ckpt,
+                                dropout=float(exp["dropout"]),
+                                model_size=model_size,
+                            )
+                            best_row["checkpoint_path"] = str(best_ckpt)
+                            best_row["best_epoch"] = epoch
+                            best_row["val_loss"] = val_loss
+                            if model is None or nid_interactions is None:
+                                best_row["error"] = f"Failed to load or parse checkpoint: {best_ckpt}"
+                            else:
+                                nid_map = normalize_nid_output(nid_interactions)
+                                _, auprc_full, auroc, auroc_full = _metric_triplet(gt, nid_map)
+                                best_row.update(
+                                    {
+                                        "success": True,
+                                        "auprc_full": auprc_full,
+                                        "auroc": auroc,
+                                        "auroc_full": auroc_full,
+                                        "num_gt": len(gt),
+                                        "num_detected": len(nid_map),
+                                        "num_candidates": len(ALL_CANDIDATES),
+                                        "error": "",
+                                    }
+                                )
+
+                best_rows.append(best_row)
+
+                if not args.best_only:
+                    traj_path = results_root / "trajectories" / f"{model_size}_{function_name}_{exp_name}_trajectory.csv"
+                    traj_df = pd.DataFrame(traj_rows)
+                    all_epoch_rows.extend(traj_rows)
+                    if args.dry_run:
+                        print(f"  [dry-run] would write {traj_path} ({len(traj_df)} rows)")
+                    else:
+                        if traj_path.exists() and not args.overwrite:
+                            print(f"  [skip] trajectory exists (use --overwrite): {traj_path}")
+                        else:
+                            traj_df.to_csv(traj_path, index=False)
+
+            if not args.trajectories_only:
+                best_path = results_root / model_size / f"{function_name}_analysis.csv"
+                best_df = pd.DataFrame(best_rows)
+                if args.dry_run:
+                    print(f"  [dry-run] would write {best_path} ({len(best_df)} rows)")
+                else:
+                    best_df.to_csv(best_path, index=False)
+
+    if not args.best_only:
+        epoch_path = results_root / "auroc_by_epoch.csv"
+        epoch_df = pd.DataFrame(all_epoch_rows)
+        if not epoch_df.empty:
+            keep_cols = [
+                "epoch",
+                "function_name",
+                "experiment",
+                "noise",
+                "optimizer",
+                "dropout",
+                "weight_decay",
+                "model_size",
+                "val_loss",
+                "auprc",
+                "auprc_full",
+                "auroc",
+                "auroc_full",
+                "success",
+                "error",
+                "checkpoint_path",
+            ]
+            epoch_df = epoch_df[[c for c in keep_cols if c in epoch_df.columns]]
+        if args.dry_run:
+            print(f"[dry-run] would write {epoch_path} ({len(epoch_df)} rows)")
         else:
-            model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
-        experiment_settings = _experiment_settings_from_run_info(run_info, experiment_name)
-
-        result = analyze_single_experiment(
-            function=function,
-            experiment_settings=experiment_settings,
-            snapshot_root=snapshot_root,
-            num_samples=num_samples,
-            seed=seed,
-            run_id=run_id,
-        )
-        result["model_size"] = model_size
-
-        key = (model_size, function_name)
-        grouped.setdefault(key, []).append(result)
-
-        status = "✓" if result["success"] else "✗"
-        auroc_str = f"{result['auroc']:.4f}" if result["auroc"] is not None else "N/A"
-        print(f"  [{status}] {function_name}/{experiment_name:30s} AUROC={auroc_str}  [{model_size}]")
-
-    all_results: dict = {}
-    for (model_size, function_name), func_results in sorted(grouped.items()):
-        out_dir = Path("results") / model_size
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_file = out_dir / f"{function_name}_analysis.csv"
-        pd.DataFrame(func_results).to_csv(out_file, index=False)
-        print(f"  → Saved {len(func_results)} rows to {out_file}")
-        all_results.setdefault(function_name, []).extend(func_results)
-
-    return all_results
+            epoch_df.to_csv(epoch_path, index=False)
 
 
-def print_summary(all_results):
-    """
-    Print a summary of results across all functions and experiments.
-    """
-    print("\n" + "="*80)
-    print("SUMMARY STATISTICS")
-    print("="*80)
-
-    total_experiments = sum(len(results) for results in all_results.values())
-    successful = sum(1 for results in all_results.values() for r in results if r["success"])
-
-    print(f"Total experiments: {total_experiments}")
-    print(f"Successful analyses: {successful} ({100*successful/total_experiments:.1f}%)")
-    print()
-
-    def _collect_metric(metric_name):
-        values = []
-        for results in all_results.values():
-            for r in results:
-                value = r.get(metric_name)
-                if value is not None:
-                    values.append(value)
-        return values
-
-    def _print_metric_stats(title, values):
-        if not values:
-            return
-        print(f"{title}:")
-        print(f"  Mean:     {np.mean(values):.4f}")
-        print(f"  Median:   {np.median(values):.4f}")
-        print(f"  Std:      {np.std(values):.4f}")
-        print(f"  Min:      {np.min(values):.4f}")
-        print(f"  Max:      {np.max(values):.4f}")
-        print()
-
-    # Compute aggregate statistics
-    all_aurocs = _collect_metric("auroc")
-    _print_metric_stats("AUROC Statistics", all_aurocs)
-
-    print("AUPRC Statistics (restricted G∪D):")
-    print("  Prevalence baseline: varies by function for restricted space")
-    _print_metric_stats("  AUPRC", _collect_metric("auprc"))
-
-    print("FULL-SPACE STATISTICS")
-    _print_metric_stats("AUROC Full-Space Statistics", _collect_metric("auroc_full"))
-    _print_metric_stats("Precision Full-Space Statistics", _collect_metric("precision_full"))
-    _print_metric_stats("Recall Full-Space Statistics", _collect_metric("recall_full"))
-    print("AUPRC Full-Space Statistics:")
-    print("  Prevalence baseline: ~0.004 (4 positives / ~1013 candidates)")
-    _print_metric_stats("  AUPRC Full-Space", _collect_metric("auprc_full"))
-
-    # Print top performers
-    print("Top 10 AUROC performances:")
-    top_results = []
-    for func_name, results in all_results.items():
-        for r in results:
-            if r["auroc"] is not None:
-                top_results.append((func_name, r["experiment_name"], r["auroc"]))
-
-    top_results.sort(key=lambda x: x[2], reverse=True)
-    for i, (func, exp, auroc) in enumerate(top_results[:10], 1):
-        print(f"  {i:2d}. {func}/{exp:20s} → AUROC = {auroc:.4f}")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Analyze checkpoints with NID and export CSV metrics.")
+    parser.add_argument("--snapshots-root", default="snapshots_clean", help="Root directory of saved snapshots.")
+    parser.add_argument("--results-root", default="results", help="Root output directory for CSVs.")
+    parser.add_argument("--model-size", choices=["small", "big"], help="Optional model size filter.")
+    parser.add_argument("--function", choices=[f"f{i}" for i in range(1, 11)], help="Optional function filter.")
+    parser.add_argument("--experiment", help="Optional experiment-name filter from config.EXPERIMENTS.")
+    parser.add_argument("--best-only", action="store_true", help="Only analyze and save best checkpoints.")
+    parser.add_argument("--trajectories-only", action="store_true", help="Only generate trajectory outputs.")
+    parser.add_argument("--dry-run", action="store_true", help="Print planned work without writing files.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing trajectory CSVs.")
+    return parser.parse_args()
 
 
-def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots", epoch_dir: Optional[Path] = None):
-    """
-    Apply NID at every saved epoch checkpoint and return AUROC/AUPRC over time.
-    Returns list of dicts with keys: epoch, auroc, auprc.
-    """
-    function_name = function.__name__
-    experiment_name = experiment_settings["name"]
-
-    if epoch_dir is not None:
-        epoch_files = sorted(epoch_dir.glob("epoch_*.pt"))
-        # Read dropout and hidden_units from the authoritative run_info.json co-located with the epoch files
-        dropout = experiment_settings.get("dropout", 0.0)
-        hidden_units_from_run_info = None
-        ri_path = epoch_dir / "run_info.json"
-        if ri_path.exists():
-            try:
-                with open(ri_path) as f:
-                    ri = json.load(f)
-                    es = ri.get("experiment_settings", {})
-                    dropout = float(es.get("dropout", dropout))
-                    hidden_units_from_run_info = ri.get("hidden_units")
-            except Exception:
-                pass
-    else:
-        snapshot_dir = Path(snapshot_root) / function_name / experiment_name
-
-        # Find epoch files: first directly in snapshot_dir, then in run_id subdirs
-        epoch_files = sorted(snapshot_dir.glob("epoch_*.pt"))
-        if not epoch_files and snapshot_dir.exists():
-            candidates = []
-            for subdir in snapshot_dir.iterdir():
-                if subdir.is_dir():
-                    sub_epochs = sorted(subdir.glob("epoch_*.pt"))
-                    if sub_epochs:
-                        mtime = max(f.stat().st_mtime for f in sub_epochs)
-                        candidates.append((mtime, sub_epochs))
-            if candidates:
-                candidates.sort(reverse=True)
-                epoch_files = candidates[0][1]
-        dropout = experiment_settings.get("dropout", 0.0)
-        run_info = _read_run_info(snapshot_dir)
-        hidden_units_from_run_info = run_info.get("hidden_units") if run_info else None
-
-    gt = get_ground_truth_interactions(function)
-
-    trajectory = []
-    for epoch_file in epoch_files:
-        m = re.search(r"epoch_(\d{4})\.pt$", epoch_file.name)
-        if not m:
-            continue
-        epoch = int(m.group(1))
-        _, nid_interactions, _, _ = load_model_and_interactions(
-            epoch_file, dropout=dropout, hidden_units=hidden_units_from_run_info
-        )
-        if nid_interactions is None:
-            continue
-        # Restricted evaluation (G∪D) used for trajectory AUROC
-        scores, labels = compute_auroc_data(gt, nid_interactions)
-        metrics = compute_metrics(scores, labels)
-        trajectory.append({"epoch": epoch, "auroc": metrics["auroc"], "auprc": metrics["auprc"]})
-
-    return trajectory
-
-
-def analyze_all_trajectories(snapshot_root="snapshots", model_size_override: Optional[str] = None):
-    """
-    Scan snapshot_root for all experiment directories and save per-epoch trajectory CSVs.
-
-    Architecture is determined automatically from run_info.json, unless model_size_override
-    is given (e.g. "small" or "big"), in which case that value is used directly.
-    Trajectories are saved to
-    results/trajectories/{model_size}/{function_name}_{experiment_name}_trajectory.csv.
-    """
-    snapshot_root_path = Path(snapshot_root)
-    if not snapshot_root_path.exists():
-        return
-
-    function_map = {f.__name__: f for f in functions}
-
-    for func_dir in sorted(snapshot_root_path.iterdir()):
-        if not func_dir.is_dir() or func_dir.name not in function_map:
-            continue
-        function = function_map[func_dir.name]
-        function_name = func_dir.name
-
-        for exp_dir in sorted(func_dir.iterdir()):
-            if not exp_dir.is_dir():
-                continue
-            experiment_name = exp_dir.name
-
-            # Discover the actual directory that holds epoch_*.pt files so that
-            # run_info.json read here and inside load_model_and_interactions both
-            # come from the same location, preventing architecture mismatches.
-            epoch_dir: Optional[Path] = None
-            direct_epochs = list(exp_dir.glob("epoch_*.pt"))
-            if direct_epochs:
-                epoch_dir = exp_dir
-            elif exp_dir.exists():
-                candidates = []
-                for subdir in exp_dir.iterdir():
-                    if subdir.is_dir():
-                        sub_epochs = list(subdir.glob("epoch_*.pt"))
-                        if sub_epochs:
-                            mtime = max(f.stat().st_mtime for f in sub_epochs)
-                            candidates.append((mtime, subdir))
-                if candidates:
-                    candidates.sort(reverse=True)
-                    epoch_dir = candidates[0][1]
-
-            run_info = _read_run_info(epoch_dir if epoch_dir is not None else exp_dir)
-            if model_size_override is not None:
-                model_size = model_size_override
-            else:
-                model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
-            experiment_settings = _experiment_settings_from_run_info(run_info, experiment_name)
-
-            trajectory = analyze_trajectory(function, experiment_settings, snapshot_root, epoch_dir=epoch_dir)
-            if not trajectory:
-                continue
-
-            df = pd.DataFrame(trajectory)
-            df["function"] = function_name
-            df["experiment"] = experiment_name
-            df["noise"] = experiment_settings["noise"]
-            df["optimizer"] = experiment_settings["optimizer"]
-            df["dropout"] = experiment_settings["dropout"]
-            df["weight_decay"] = experiment_settings["weight_decay"]
-            df["model_size"] = model_size
-
-            out_dir = Path("results") / "trajectories" / model_size
-            out_dir.mkdir(parents=True, exist_ok=True)
-            fname = f"{function_name}_{experiment_name}_trajectory.csv"
-            df.to_csv(out_dir / fname, index=False)
+def main() -> None:
+    args = parse_args()
+    run_analysis(args)
 
 
 if __name__ == "__main__":
-    import shutil
-
-    parser = argparse.ArgumentParser(
-        description="Analyze snapshots and compute interaction metrics for all architectures"
-    )
-    parser.add_argument("--snapshot-root", default="snapshots", help="Root folder for snapshots (single-root mode)")
-    parser.add_argument("--snapshot-root-small", default=None, help="Root folder containing only small-model snapshots (sets model_size=small without reading run_info.json)")
-    parser.add_argument("--snapshot-root-big", default=None, help="Root folder containing only big-model snapshots (sets model_size=big without reading run_info.json)")
-    parser.add_argument("--num-samples", type=int, default=30000, help="Number of samples for GT generation")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--run-id", default=None, help="Optional run_id to select snapshots under each experiment")
-    parser.add_argument(
-        "--clean",
-        action="store_true",
-        help="Delete and recreate results/small/, results/big/, results/trajectories/ before running",
-    )
-
-    args = parser.parse_args()
-
-    if args.clean:
-        dirs_to_clean = [Path("results/small"), Path("results/big"), Path("results/trajectories")]
-        print("⚠  --clean will delete results/small/, results/big/, results/trajectories/")
-        print("   Press Enter to confirm or Ctrl-C to abort: ", end="", flush=True)
-        input()
-        for d in dirs_to_clean:
-            if d.exists():
-                shutil.rmtree(d)
-                print(f"  Deleted {d}")
-            d.mkdir(parents=True, exist_ok=True)
-            print(f"  Recreated {d}")
-        print()
-
-    use_split_roots = args.snapshot_root_small is not None or args.snapshot_root_big is not None
-
-    if use_split_roots:
-        all_results: dict = {}
-        for root, size in (
-            (args.snapshot_root_small, "small"),
-            (args.snapshot_root_big, "big"),
-        ):
-            if root is None:
-                continue
-            partial = analyze_all_experiments(
-                snapshot_root=root,
-                num_samples=args.num_samples,
-                seed=args.seed,
-                run_id=args.run_id,
-                model_size_override=size,
-            )
-            for fn, rows in partial.items():
-                all_results.setdefault(fn, []).extend(rows)
-            analyze_all_trajectories(snapshot_root=root, model_size_override=size)
-    else:
-        all_results = analyze_all_experiments(
-            snapshot_root=args.snapshot_root,
-            num_samples=args.num_samples,
-            seed=args.seed,
-            run_id=args.run_id,
-        )
-        analyze_all_trajectories(snapshot_root=args.snapshot_root)
-
-    print_summary(all_results)
+    main()
