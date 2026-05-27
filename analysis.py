@@ -22,7 +22,7 @@ device = torch.device(
 )
 
 
-def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
+def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0, hidden_units=None):
     """
     Load a trained model from checkpoint and extract NID interactions.
 
@@ -30,6 +30,8 @@ def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
         snapshot_path: Path to best_epoch_XXXX.pt checkpoint
         num_features: Number of input features (default 10)
         dropout: Dropout rate (should match the training configuration)
+        hidden_units: Hidden layer sizes. When provided, the run_info.json
+            file-system lookup is skipped entirely and this value is used directly.
 
     Returns:
         tuple: (model, nid_interactions, best_loss, epoch)
@@ -43,19 +45,20 @@ def load_model_and_interactions(snapshot_path, num_features=10, dropout=0.0):
 
     checkpoint = torch.load(snapshot_path, map_location=device)
 
-    # Infer hidden_units from run_info.json if available (next to checkpoint in same dir)
-    snapshot_dir = Path(snapshot_path).parent
-    run_info_path = snapshot_dir / "run_info.json"
-    hidden_units = [64, 64]  # fallback default
+    # Infer hidden_units from run_info.json only when the caller did not supply it
+    if hidden_units is None:
+        snapshot_dir = Path(snapshot_path).parent
+        run_info_path = snapshot_dir / "run_info.json"
+        hidden_units = [64, 64]  # fallback default
 
-    if run_info_path.exists():
-        try:
-            with open(run_info_path) as f:
-                run_info = json.load(f)
-                if "hidden_units" in run_info:
-                    hidden_units = run_info["hidden_units"]
-        except Exception:
-            pass  # Use fallback
+        if run_info_path.exists():
+            try:
+                with open(run_info_path) as f:
+                    run_info = json.load(f)
+                    if "hidden_units" in run_info:
+                        hidden_units = run_info["hidden_units"]
+            except Exception:
+                pass  # Use fallback
 
     # Reconstruct model with correct architecture and dropout
     model = MLP(
@@ -728,11 +731,19 @@ def analyze_single_experiment(function, experiment_settings, snapshot_root="snap
     return result
 
 
-def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=42, run_id: Optional[str] = None):
+def analyze_all_experiments(
+    snapshot_root="snapshots",
+    num_samples=30000,
+    seed=42,
+    run_id: Optional[str] = None,
+    model_size_override: Optional[str] = None,
+):
     """
     Analyze all experiments by scanning snapshot_root for {function_name}/{experiment_name}/ directories.
 
-    Architecture is determined automatically from run_info.json inside each snapshot directory.
+    Architecture is determined automatically from run_info.json inside each snapshot directory,
+    unless model_size_override is given (e.g. "small" or "big"), in which case that value is
+    used directly and run_info.json is only consulted for experiment settings.
     Results are saved to results/{model_size}/{function_name}_analysis.csv.
 
     Args:
@@ -740,6 +751,7 @@ def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=4
         num_samples: Number of samples for generating GT data
         seed: Random seed
         run_id: Optional run_id to prefer when selecting snapshots
+        model_size_override: When set, skip hidden_units detection and use this model size
 
     Returns:
         dict: Mapping of function_name to list of result dicts
@@ -769,7 +781,10 @@ def analyze_all_experiments(snapshot_root="snapshots", num_samples=30000, seed=4
     for function_name, experiment_name, exp_dir in snapshot_dirs:
         function = function_map[function_name]
         run_info = _read_run_info(exp_dir, run_id)
-        model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
+        if model_size_override is not None:
+            model_size = model_size_override
+        else:
+            model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
         experiment_settings = _experiment_settings_from_run_info(run_info, experiment_name)
 
         result = analyze_single_experiment(
@@ -865,28 +880,48 @@ def print_summary(all_results):
         print(f"  {i:2d}. {func}/{exp:20s} → AUROC = {auroc:.4f}")
 
 
-def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots"):
+def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots", epoch_dir: Optional[Path] = None):
     """
     Apply NID at every saved epoch checkpoint and return AUROC/AUPRC over time.
     Returns list of dicts with keys: epoch, auroc, auprc.
     """
     function_name = function.__name__
     experiment_name = experiment_settings["name"]
-    snapshot_dir = Path(snapshot_root) / function_name / experiment_name
 
-    # Find epoch files: first directly in snapshot_dir, then in run_id subdirs
-    epoch_files = sorted(snapshot_dir.glob("epoch_*.pt"))
-    if not epoch_files and snapshot_dir.exists():
-        candidates = []
-        for subdir in snapshot_dir.iterdir():
-            if subdir.is_dir():
-                sub_epochs = sorted(subdir.glob("epoch_*.pt"))
-                if sub_epochs:
-                    mtime = max(f.stat().st_mtime for f in sub_epochs)
-                    candidates.append((mtime, sub_epochs))
-        if candidates:
-            candidates.sort(reverse=True)
-            epoch_files = candidates[0][1]
+    if epoch_dir is not None:
+        epoch_files = sorted(epoch_dir.glob("epoch_*.pt"))
+        # Read dropout and hidden_units from the authoritative run_info.json co-located with the epoch files
+        dropout = experiment_settings.get("dropout", 0.0)
+        hidden_units_from_run_info = None
+        ri_path = epoch_dir / "run_info.json"
+        if ri_path.exists():
+            try:
+                with open(ri_path) as f:
+                    ri = json.load(f)
+                    es = ri.get("experiment_settings", {})
+                    dropout = float(es.get("dropout", dropout))
+                    hidden_units_from_run_info = ri.get("hidden_units")
+            except Exception:
+                pass
+    else:
+        snapshot_dir = Path(snapshot_root) / function_name / experiment_name
+
+        # Find epoch files: first directly in snapshot_dir, then in run_id subdirs
+        epoch_files = sorted(snapshot_dir.glob("epoch_*.pt"))
+        if not epoch_files and snapshot_dir.exists():
+            candidates = []
+            for subdir in snapshot_dir.iterdir():
+                if subdir.is_dir():
+                    sub_epochs = sorted(subdir.glob("epoch_*.pt"))
+                    if sub_epochs:
+                        mtime = max(f.stat().st_mtime for f in sub_epochs)
+                        candidates.append((mtime, sub_epochs))
+            if candidates:
+                candidates.sort(reverse=True)
+                epoch_files = candidates[0][1]
+        dropout = experiment_settings.get("dropout", 0.0)
+        run_info = _read_run_info(snapshot_dir)
+        hidden_units_from_run_info = run_info.get("hidden_units") if run_info else None
 
     gt = get_ground_truth_interactions(function)
 
@@ -897,7 +932,7 @@ def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots")
             continue
         epoch = int(m.group(1))
         _, nid_interactions, _, _ = load_model_and_interactions(
-            epoch_file, dropout=experiment_settings["dropout"]
+            epoch_file, dropout=dropout, hidden_units=hidden_units_from_run_info
         )
         if nid_interactions is None:
             continue
@@ -909,11 +944,13 @@ def analyze_trajectory(function, experiment_settings, snapshot_root="snapshots")
     return trajectory
 
 
-def analyze_all_trajectories(snapshot_root="snapshots"):
+def analyze_all_trajectories(snapshot_root="snapshots", model_size_override: Optional[str] = None):
     """
     Scan snapshot_root for all experiment directories and save per-epoch trajectory CSVs.
 
-    Architecture is determined automatically from run_info.json. Trajectories are saved to
+    Architecture is determined automatically from run_info.json, unless model_size_override
+    is given (e.g. "small" or "big"), in which case that value is used directly.
+    Trajectories are saved to
     results/trajectories/{model_size}/{function_name}_{experiment_name}_trajectory.csv.
     """
     snapshot_root_path = Path(snapshot_root)
@@ -933,11 +970,33 @@ def analyze_all_trajectories(snapshot_root="snapshots"):
                 continue
             experiment_name = exp_dir.name
 
-            run_info = _read_run_info(exp_dir)
-            model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
+            # Discover the actual directory that holds epoch_*.pt files so that
+            # run_info.json read here and inside load_model_and_interactions both
+            # come from the same location, preventing architecture mismatches.
+            epoch_dir: Optional[Path] = None
+            direct_epochs = list(exp_dir.glob("epoch_*.pt"))
+            if direct_epochs:
+                epoch_dir = exp_dir
+            elif exp_dir.exists():
+                candidates = []
+                for subdir in exp_dir.iterdir():
+                    if subdir.is_dir():
+                        sub_epochs = list(subdir.glob("epoch_*.pt"))
+                        if sub_epochs:
+                            mtime = max(f.stat().st_mtime for f in sub_epochs)
+                            candidates.append((mtime, subdir))
+                if candidates:
+                    candidates.sort(reverse=True)
+                    epoch_dir = candidates[0][1]
+
+            run_info = _read_run_info(epoch_dir if epoch_dir is not None else exp_dir)
+            if model_size_override is not None:
+                model_size = model_size_override
+            else:
+                model_size = _hidden_units_to_model_size(run_info.get("hidden_units") if run_info else None)
             experiment_settings = _experiment_settings_from_run_info(run_info, experiment_name)
 
-            trajectory = analyze_trajectory(function, experiment_settings, snapshot_root)
+            trajectory = analyze_trajectory(function, experiment_settings, snapshot_root, epoch_dir=epoch_dir)
             if not trajectory:
                 continue
 
@@ -962,7 +1021,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Analyze snapshots and compute interaction metrics for all architectures"
     )
-    parser.add_argument("--snapshot-root", default="snapshots", help="Root folder for snapshots")
+    parser.add_argument("--snapshot-root", default="snapshots", help="Root folder for snapshots (single-root mode)")
+    parser.add_argument("--snapshot-root-small", default=None, help="Root folder containing only small-model snapshots (sets model_size=small without reading run_info.json)")
+    parser.add_argument("--snapshot-root-big", default=None, help="Root folder containing only big-model snapshots (sets model_size=big without reading run_info.json)")
     parser.add_argument("--num-samples", type=int, default=30000, help="Number of samples for GT generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--run-id", default=None, help="Optional run_id to select snapshots under each experiment")
@@ -987,12 +1048,33 @@ if __name__ == "__main__":
             print(f"  Recreated {d}")
         print()
 
-    all_results = analyze_all_experiments(
-        snapshot_root=args.snapshot_root,
-        num_samples=args.num_samples,
-        seed=args.seed,
-        run_id=args.run_id,
-    )
-    analyze_all_trajectories(snapshot_root=args.snapshot_root)
+    use_split_roots = args.snapshot_root_small is not None or args.snapshot_root_big is not None
+
+    if use_split_roots:
+        all_results: dict = {}
+        for root, size in (
+            (args.snapshot_root_small, "small"),
+            (args.snapshot_root_big, "big"),
+        ):
+            if root is None:
+                continue
+            partial = analyze_all_experiments(
+                snapshot_root=root,
+                num_samples=args.num_samples,
+                seed=args.seed,
+                run_id=args.run_id,
+                model_size_override=size,
+            )
+            for fn, rows in partial.items():
+                all_results.setdefault(fn, []).extend(rows)
+            analyze_all_trajectories(snapshot_root=root, model_size_override=size)
+    else:
+        all_results = analyze_all_experiments(
+            snapshot_root=args.snapshot_root,
+            num_samples=args.num_samples,
+            seed=args.seed,
+            run_id=args.run_id,
+        )
+        analyze_all_trajectories(snapshot_root=args.snapshot_root)
 
     print_summary(all_results)
