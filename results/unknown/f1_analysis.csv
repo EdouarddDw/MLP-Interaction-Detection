@@ -1,9 +1,0 @@
-function_name,experiment_name,noise,optimizer,dropout,weight_decay,auroc,precision,recall,auprc,auroc_full,precision_full,recall_full,auprc_full,num_gt,num_detected,num_exact_matched,num_superset_matched_unique,num_matched,matched_pairs,best_epoch,val_loss,success,error,model_size
-f1,smoke_best_snapshot,0.0,adam,0.0,False,,,,,,,,,0,0,0,0,0,[],-1,inf,False,"Error(s) in loading state_dict for MLP:
-	Missing key(s) in state_dict: ""interaction_mlp.2.weight"", ""interaction_mlp.2.bias"", ""interaction_mlp.4.weight"", ""interaction_mlp.4.bias"". 
-	Unexpected key(s) in state_dict: ""interaction_mlp.6.weight"", ""interaction_mlp.6.bias"", ""interaction_mlp.3.weight"", ""interaction_mlp.3.bias"". ",unknown
-f1,smoke_metrics_csv,0.0,adam,0.0,False,,,,,,,,,0,0,0,0,0,[],-1,inf,False,"Error(s) in loading state_dict for MLP:
-	Missing key(s) in state_dict: ""interaction_mlp.2.weight"", ""interaction_mlp.2.bias"", ""interaction_mlp.4.weight"", ""interaction_mlp.4.bias"". 
-	Unexpected key(s) in state_dict: ""interaction_mlp.6.weight"", ""interaction_mlp.6.bias"", ""interaction_mlp.3.weight"", ""interaction_mlp.3.bias"". ",unknown
-f1,smoke_snapshot,0.0,adam,0.0,False,,,,,,,,,0,0,0,0,0,[],-1,inf,False,,unknown
-f1,smoke_snapshot_20_then_every,0.0,adam,0.0,False,,,,,,,,,0,0,0,0,0,[],-1,inf,False,,unknown
