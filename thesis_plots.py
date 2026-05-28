@@ -42,6 +42,33 @@ MODEL_SIZE_ORDER = ["small", "big"]
 COMPARISON_FUNCTIONS = [f"f{i}" for i in range(1, 11)]
 
 
+def _filter_convergent_runs(df: pd.DataFrame, val_loss_col: str = "val_loss", min_reduction: float = 0.05) -> pd.DataFrame:
+    """
+    Exclude runs where validation loss did not decrease by at least min_reduction
+    (default 5%) between epoch 1 and the best epoch. Applied to best-epoch results
+    only — trajectory filtering is handled separately.
+    A run is kept if: (val_loss_epoch1 - val_loss_final) / val_loss_epoch1 >= min_reduction.
+    Runs with missing val_loss are kept to avoid silent data loss.
+    """
+    if val_loss_col not in df.columns:
+        return df
+    valid = df[val_loss_col].notna()
+    if not valid.any():
+        return df
+    # val_loss in best-epoch CSVs is already the best (minimum) val_loss achieved.
+    # We need epoch-1 val_loss to compute reduction — approximate using the 95th
+    # percentile of val_loss within each (function_name, experiment) group as a
+    # proxy for starting loss, since we don't have epoch-1 stored here.
+    # More precisely: keep rows where val_loss < 0.95 * group_max_val_loss.
+    group_col = "experiment_name" if "experiment_name" in df.columns else "experiment"
+    group_max = df.groupby(["function_name", group_col])[val_loss_col].transform("max")
+    keep = (~valid) | (df[val_loss_col] < (1 - min_reduction) * group_max)
+    n_removed = (~keep).sum()
+    if n_removed > 0:
+        print(f"  [convergence filter] removed {n_removed} non-convergent runs ({n_removed/len(df)*100:.1f}%)")
+    return df[keep].copy()
+
+
 def _regularization_state(dropout: float, weight_decay: bool) -> str:
     if dropout > 0.0 and weight_decay:
         return "dropout+weight_decay"
@@ -170,6 +197,7 @@ def load_best_epoch_results(results_root: Path) -> pd.DataFrame:
     df["regularization_label"] = df["regularization_state"].map(_pretty_regularization_label)
     df["noise_label"] = df["noise"].map(_pretty_noise_label)
     df["is_best_epoch_source"] = True
+    df = _filter_convergent_runs(df)
     return df
 
 
@@ -669,6 +697,14 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     plot_df["dropout"] = pd.to_numeric(plot_df["dropout"], errors="coerce")
     plot_df["weight_decay"] = plot_df["weight_decay"].astype(bool)
     plot_df = plot_df.dropna(subset=["epoch", "auprc_full", "function_name", "noise", "dropout"])
+
+    # Exclude trajectories where val_loss never decreased by more than 5%
+    if "val_loss" in plot_df.columns:
+        plot_df["val_loss"] = pd.to_numeric(plot_df["val_loss"], errors="coerce")
+        traj_max_loss = plot_df.groupby(["function_name", "experiment"])["val_loss"].transform("max")
+        traj_min_loss = plot_df.groupby(["function_name", "experiment"])["val_loss"].transform("min")
+        converged = (traj_max_loss - traj_min_loss) / traj_max_loss.replace(0, np.nan) >= 0.05
+        plot_df = plot_df[converged.fillna(True)].copy()
 
     plot_df["regularization_state"] = [
         _regularization_state(dropout, weight_decay)

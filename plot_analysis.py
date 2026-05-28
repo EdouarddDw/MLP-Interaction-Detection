@@ -62,7 +62,17 @@ def _group_sort_key(group_column: str, value):
 def collect_epoch_level_results(results_path: Path = Path("results/auroc_by_epoch.csv")) -> pd.DataFrame:
     if not results_path.exists():
         raise FileNotFoundError(f"auroc_by_epoch.csv not found at {results_path} — run analysis.py first")
-    return pd.read_csv(results_path)
+    results_df = pd.read_csv(results_path)
+    if "val_loss" in results_df.columns:
+        results_df["val_loss"] = pd.to_numeric(results_df["val_loss"], errors="coerce")
+        traj_max = results_df.groupby(["function_name", "experiment_name"])["val_loss"].transform("max")
+        traj_min = results_df.groupby(["function_name", "experiment_name"])["val_loss"].transform("min")
+        converged = (traj_max - traj_min) / traj_max.replace(0, np.nan) >= 0.05
+        n_removed = (~converged.fillna(True)).sum()
+        if n_removed > 0:
+            print(f"  [convergence filter] removed {n_removed} epoch rows from non-convergent runs")
+        results_df = results_df[converged.fillna(True)].copy()
+    return results_df
 
 
 def _summary_by_epoch(df: pd.DataFrame, group_column: str) -> pd.DataFrame:
