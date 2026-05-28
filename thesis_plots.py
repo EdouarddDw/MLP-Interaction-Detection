@@ -926,6 +926,190 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     plt.close(fig)
 
 
+def _plot_trajectory_highlight(trajectories_dir: Path, output_path: Path) -> None:
+    if not trajectories_dir.exists() or not trajectories_dir.is_dir():
+        return
+
+    trajectory_files_with_size: list[tuple[str, Path]] = []
+    for path in sorted(trajectories_dir.glob("*_trajectory.csv")):
+        model_size = path.name.split("_")[0]
+        trajectory_files_with_size.append((model_size, path))
+    if not trajectory_files_with_size:
+        return
+
+    frames: list[pd.DataFrame] = []
+    for model_size, path in trajectory_files_with_size:
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        if "model_size" not in frame.columns:
+            frame["model_size"] = model_size
+        frames.append(frame)
+
+    if not frames:
+        return
+
+    plot_df = pd.concat(frames, ignore_index=True)
+    if plot_df.empty:
+        return
+
+    required_columns = {"epoch", "auprc_full", "function_name", "noise", "dropout", "weight_decay"}
+    if not required_columns.issubset(plot_df.columns):
+        return
+
+    plot_df = plot_df.copy()
+    plot_df["epoch"] = pd.to_numeric(plot_df["epoch"], errors="coerce")
+    plot_df["auprc_full"] = pd.to_numeric(plot_df["auprc_full"], errors="coerce")
+    plot_df["noise"] = pd.to_numeric(plot_df["noise"], errors="coerce")
+    plot_df["dropout"] = pd.to_numeric(plot_df["dropout"], errors="coerce")
+    plot_df["weight_decay"] = plot_df["weight_decay"].astype(bool)
+    plot_df = plot_df.dropna(subset=["epoch", "auprc_full", "function_name", "noise", "dropout"])
+
+    if "val_loss" in plot_df.columns:
+        plot_df["val_loss"] = pd.to_numeric(plot_df["val_loss"], errors="coerce")
+        convergent_keys: set[tuple] = set()
+        for (fn, exp), group in plot_df.groupby(["function_name", "experiment"]):
+            start_rows = group.loc[group["epoch"] == group["epoch"].min(), "val_loss"]
+            end_rows = group.loc[group["epoch"] == group["epoch"].max(), "val_loss"]
+            if start_rows.empty or end_rows.empty:
+                continue
+            start_loss = float(start_rows.iloc[0])
+            end_loss = float(end_rows.iloc[0])
+            if start_loss <= 0 or (start_loss - end_loss) / start_loss < 0.03:
+                continue
+            convergent_keys.add((fn, exp))
+        plot_df = plot_df[
+            plot_df.apply(lambda r: (r["function_name"], r["experiment"]) in convergent_keys, axis=1)
+        ].copy()
+
+    plot_df["regularization_state"] = [
+        _regularization_state(dropout, weight_decay)
+        for dropout, weight_decay in zip(plot_df["dropout"], plot_df["weight_decay"])
+    ]
+    plot_df = plot_df[plot_df["regularization_state"].isin(REGULARIZATION_ORDER)].copy()
+
+    if plot_df.empty:
+        return
+
+    def _function_sort_key(name: str):
+        if str(name).startswith("f") and str(name)[1:].isdigit():
+            return int(str(name)[1:])
+        return str(name)
+
+    _ensure_parent(output_path)
+
+    highlight_cells = [
+        (0, 0, 0.0, "base"),
+        (0, 1, 0.0, "dropout+weight_decay"),
+        (1, 0, 1.0, "base"),
+        (1, 1, 1.0, "dropout+weight_decay"),
+    ]
+    col_titles = ["Base", "Dropout + weight decay"]
+    row_labels_text = ["noise = 0", "noise = 1"]
+
+    fig, axes = plt.subplots(
+        2, 2,
+        figsize=(7.0, 5.0),
+        sharex=True,
+        sharey=True,
+    )
+
+    all_epochs = np.sort(plot_df["epoch"].dropna().unique())
+    if all_epochs.size == 0:
+        plt.close(fig)
+        return
+
+    for row_index, col_index, noise_value, reg_state in highlight_cells:
+        ax = axes[row_index, col_index]
+        cell_df = plot_df[
+            (plot_df["noise"] == noise_value)
+            & (plot_df["regularization_state"] == reg_state)
+        ].copy()
+
+        if not cell_df.empty:
+            cell_df = cell_df[cell_df["epoch"] > 1].copy()
+            function_epoch = (
+                cell_df.groupby(["function_name", "epoch"], as_index=False)["auprc_full"]
+                .mean()
+            )
+            if not function_epoch.empty:
+                function_names = sorted(
+                    function_epoch["function_name"].dropna().unique(),
+                    key=_function_sort_key,
+                )
+                pivot = (
+                    function_epoch.pivot(index="epoch", columns="function_name", values="auprc_full")
+                    .reindex(all_epochs)
+                )
+
+                for function_name in function_names:
+                    if function_name not in pivot.columns:
+                        continue
+                    ax.plot(
+                        pivot.index,
+                        pivot[function_name],
+                        color="0.6",
+                        linewidth=0.6,
+                        alpha=0.35,
+                        zorder=1,
+                    )
+
+                mean_series = pivot.mean(axis=1)
+                std_series = pivot.std(axis=1).fillna(0.0)
+                valid = mean_series.notna()
+                if valid.any():
+                    x_vals = mean_series.index.to_numpy(dtype=float)[valid.to_numpy()]
+                    mean_vals = mean_series.to_numpy(dtype=float)[valid.to_numpy()]
+                    std_vals = std_series.to_numpy(dtype=float)[valid.to_numpy()]
+                    ax.fill_between(
+                        x_vals,
+                        mean_vals - std_vals,
+                        mean_vals + std_vals,
+                        color="#2A6F97",
+                        alpha=0.15,
+                        linewidth=0,
+                        zorder=2,
+                    )
+                    ax.plot(
+                        x_vals,
+                        mean_vals,
+                        color="#2A6F97",
+                        linewidth=2.2,
+                        zorder=5,
+                    )
+
+        ax.set_ylim(0.0, 1.0)
+        ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
+
+        if row_index == 0:
+            ax.set_title(col_titles[col_index], fontsize=10)
+
+        if row_index < 1:
+            ax.tick_params(labelbottom=False)
+        else:
+            ax.set_xlabel("Epoch")
+
+        if col_index > 0:
+            ax.tick_params(labelleft=False)
+
+        if col_index == 1:
+            ax.text(
+                1.03,
+                0.5,
+                row_labels_text[row_index],
+                transform=ax.transAxes,
+                ha="left",
+                va="center",
+                fontsize=10,
+            )
+
+    fig.supylabel(r"AUPRC ($2^{[10]}$)", fontsize=9)
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
 def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
     _EMPTY_COLS = ["function", "experiment", "noise", "regularization_state", "peak_auprc_epoch", "peak_auprc", "model_size"]
     if not trajectories_dir.exists() or not trajectories_dir.is_dir():
@@ -1657,6 +1841,8 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         trajectories_dir,
         output_dir / "interaction_recovery_trajectories.pgf",
     )
+
+    _plot_trajectory_highlight(trajectories_dir, output_dir / "interaction_recovery_highlight.pgf")
 
     peak_summary_df = compute_peak_auroc_epoch_summary(trajectories_dir)
     _plot_peak_epoch_vs_noise(peak_summary_df, output_dir / "peak_epoch_vs_noise.pgf")
