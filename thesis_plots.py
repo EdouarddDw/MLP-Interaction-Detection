@@ -44,7 +44,7 @@ COMPARISON_FUNCTIONS = [f"f{i}" for i in range(1, 11)]
 _CONVERGENCE_STATS: pd.DataFrame = pd.DataFrame()
 
 
-def _filter_convergent_runs(df: pd.DataFrame, trajectories_dir: Path, min_reduction: float = 0.05) -> pd.DataFrame:
+def _filter_convergent_runs(df: pd.DataFrame, trajectories_dir: Path, min_reduction: float = 0.03) -> pd.DataFrame:
     trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv")) if trajectories_dir.exists() else []
     frames: list[pd.DataFrame] = []
     for path in trajectory_files:
@@ -170,7 +170,7 @@ def _read_analysis_csvs(folder: Path, model_size: str) -> list[pd.DataFrame]:
     return frames
 
 
-def compute_convergence_stats(df: pd.DataFrame, trajectories_dir: Path, min_reduction: float = 0.05) -> pd.DataFrame:
+def compute_convergence_stats(df: pd.DataFrame, trajectories_dir: Path, min_reduction: float = 0.03) -> pd.DataFrame:
     """
     Given the raw (unfiltered) best-epoch dataframe, return a summary of which
     experiments were flagged as non-convergent based on trajectory val_loss.
@@ -785,13 +785,23 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     plot_df["weight_decay"] = plot_df["weight_decay"].astype(bool)
     plot_df = plot_df.dropna(subset=["epoch", "auprc_full", "function_name", "noise", "dropout"])
 
-    # Exclude trajectories where val_loss never decreased by more than 5%
+    # Exclude trajectories where val_loss did not decrease by >= 3% from start to end epoch
     if "val_loss" in plot_df.columns:
         plot_df["val_loss"] = pd.to_numeric(plot_df["val_loss"], errors="coerce")
-        traj_max_loss = plot_df.groupby(["function_name", "experiment"])["val_loss"].transform("max")
-        traj_min_loss = plot_df.groupby(["function_name", "experiment"])["val_loss"].transform("min")
-        converged = (traj_max_loss - traj_min_loss) / traj_max_loss.replace(0, np.nan) >= 0.05
-        plot_df = plot_df[converged.fillna(True)].copy()
+        convergent_keys: set[tuple] = set()
+        for (fn, exp), group in plot_df.groupby(["function_name", "experiment"]):
+            start_rows = group.loc[group["epoch"] == group["epoch"].min(), "val_loss"]
+            end_rows = group.loc[group["epoch"] == group["epoch"].max(), "val_loss"]
+            if start_rows.empty or end_rows.empty:
+                continue
+            start_loss = float(start_rows.iloc[0])
+            end_loss = float(end_rows.iloc[0])
+            if start_loss <= 0 or (start_loss - end_loss) / start_loss < 0.03:
+                continue
+            convergent_keys.add((fn, exp))
+        plot_df = plot_df[
+            plot_df.apply(lambda r: (r["function_name"], r["experiment"]) in convergent_keys, axis=1)
+        ].copy()
 
     plot_df["regularization_state"] = [
         _regularization_state(dropout, weight_decay)
@@ -951,6 +961,18 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
         frame["weight_decay"] = weight_decay
         frame = frame.dropna(subset=["epoch", "auprc_full", "function_name", "experiment", "noise", "dropout"])
         if frame.empty:
+            continue
+
+        if "val_loss" not in frame.columns:
+            continue
+        frame["val_loss"] = pd.to_numeric(frame["val_loss"], errors="coerce")
+        start_rows = frame.loc[frame["epoch"] == frame["epoch"].min(), "val_loss"].dropna()
+        end_rows = frame.loc[frame["epoch"] == frame["epoch"].max(), "val_loss"].dropna()
+        if start_rows.empty or end_rows.empty:
+            continue
+        start_loss = float(start_rows.iloc[0])
+        end_loss = float(end_rows.iloc[0])
+        if start_loss <= 0 or (start_loss - end_loss) / start_loss < 0.03:
             continue
 
         peak_index = frame["auprc_full"].idxmax()
@@ -1135,8 +1157,10 @@ def _heatmap_matrix(df: pd.DataFrame) -> pd.DataFrame:
 
 def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
     data = matrix.to_numpy(dtype=float)
-    im = ax.imshow(data, vmin=0.0, vmax=0.2, cmap="cividis", aspect="auto")
-
+    valid = data[~np.isnan(data)]
+    vmin = float(np.min(valid)) if len(valid) > 0 else 0.0
+    vmax = float(np.max(valid)) if len(valid) > 0 else 1.0
+    im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap="cividis", aspect="auto")
     ax.set_xticks(np.arange(len(matrix.columns)))
     ax.set_xticklabels([_pretty_regularization_label(col) for col in matrix.columns], rotation=20, ha="right")
     ax.set_yticks(np.arange(len(matrix.index)))
@@ -1446,6 +1470,142 @@ def generate_convergence_report(stats_df: pd.DataFrame, output_path: Path) -> No
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _plot_convergence_removal_dots(trajectories_dir: Path, output_path: Path) -> None:
+    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv")) if trajectories_dir.exists() else []
+    frames: list[pd.DataFrame] = []
+    for path in trajectory_files:
+        model_size = path.name.split("_")[0]
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        if "model_size" not in frame.columns:
+            frame["model_size"] = model_size
+        frames.append(frame)
+
+    if not frames:
+        return
+
+    traj_df = pd.concat(frames, ignore_index=True)
+    traj_df["epoch"] = pd.to_numeric(traj_df["epoch"], errors="coerce")
+    traj_df["val_loss"] = pd.to_numeric(traj_df["val_loss"], errors="coerce")
+    traj_df = traj_df.dropna(subset=["epoch", "val_loss"])
+
+    removed_set: set[tuple[str, str, str]] = set()
+    for (fn, exp, ms), group in traj_df.groupby(["function_name", "experiment", "model_size"]):
+        start_rows = group.loc[group["epoch"] == group["epoch"].min(), "val_loss"]
+        end_rows = group.loc[group["epoch"] == group["epoch"].max(), "val_loss"]
+        if start_rows.empty or end_rows.empty:
+            continue
+        start_loss = float(start_rows.iloc[0])
+        end_loss = float(end_rows.iloc[0])
+        if start_loss <= 0 or (start_loss - end_loss) / start_loss < 0.03:
+            removed_set.add((str(fn), str(exp), str(ms)))
+
+    exp_meta: dict[str, dict] = {}
+    for exp, group in traj_df.groupby("experiment"):
+        row = group.iloc[0]
+        dropout = float(row["dropout"]) if "dropout" in traj_df.columns else 0.0
+        weight_decay = str(row.get("weight_decay", "False")).lower() in ["true", "1", "yes"]
+        exp_meta[str(exp)] = {
+            "noise": float(row["noise"]) if "noise" in traj_df.columns else 0.0,
+            "regularization_state": _regularization_state(dropout, weight_decay),
+            "optimizer": str(row["optimizer"]) if "optimizer" in traj_df.columns else "unknown",
+        }
+
+    noise_ord = {n: i for i, n in enumerate(NOISE_ORDER)}
+    reg_ord = {r: i for i, r in enumerate(REGULARIZATION_ORDER)}
+
+    all_experiments = sorted(
+        exp_meta.keys(),
+        key=lambda e: (
+            noise_ord.get(exp_meta[e]["noise"], 99),
+            reg_ord.get(exp_meta[e]["regularization_state"], 99),
+            exp_meta[e]["optimizer"],
+        ),
+    )
+
+    functions = [f"f{i}" for i in range(1, 11)]
+    n_rows = len(all_experiments)
+    n_cols = len(functions)
+
+    noise_groups: dict[float, list[int]] = {}
+    for row_i, exp in enumerate(all_experiments):
+        noise_groups.setdefault(exp_meta[exp]["noise"], []).append(row_i)
+
+    def _reg_short(state: str) -> str:
+        if state == "dropout+weight_decay":
+            return "Dropout+W"
+        return _pretty_regularization_label(state).split()[0]
+
+    row_labels = [
+        f"{exp_meta[e]['optimizer']} · {_reg_short(exp_meta[e]['regularization_state'])}"
+        for e in all_experiments
+    ]
+
+    _ensure_parent(output_path)
+    fig, ax = plt.subplots(figsize=(10, 12))
+
+    small_handle = ax.scatter([], [], marker="o", color="#2A6F97", s=60, label="Small (removed)")
+    big_handle = ax.scatter([], [], marker="s", color="#E76F51", s=60, label="Big (removed)")
+
+    for row_i, exp in enumerate(all_experiments):
+        for col_i, fn in enumerate(functions):
+            small_removed = (fn, exp, "small") in removed_set
+            big_removed = (fn, exp, "big") in removed_set
+            if small_removed and big_removed:
+                ax.scatter(col_i - 0.15, row_i, marker="o", color="#2A6F97", s=60, zorder=3)
+                ax.scatter(col_i + 0.15, row_i, marker="s", color="#E76F51", s=60, zorder=3)
+            elif small_removed:
+                ax.scatter(col_i, row_i, marker="o", color="#2A6F97", s=60, zorder=3)
+            elif big_removed:
+                ax.scatter(col_i, row_i, marker="s", color="#E76F51", s=60, zorder=3)
+
+    for row_i in range(n_rows):
+        ax.axhline(row_i, color="gray", alpha=0.15, linewidth=0.5, zorder=0)
+
+    sorted_noise_groups = sorted(noise_groups.items(), key=lambda x: noise_ord.get(x[0], 99))
+    for noise_val, row_indices in sorted_noise_groups:
+        max_row = max(row_indices)
+        if max_row < n_rows - 1:
+            ax.axhline(max_row + 0.5, color="black", linewidth=0.8, zorder=1)
+        mid = (min(row_indices) + max(row_indices)) / 2.0
+        ax.text(
+            -1.2, mid,
+            f"noise = {_pretty_noise_label(noise_val)}",
+            ha="right", va="center", fontsize=9,
+            transform=ax.transData,
+            clip_on=False,
+        )
+
+    ax.set_xlim(-0.5, n_cols - 0.5)
+    ax.set_ylim(n_rows - 0.5, -0.5)
+
+    ax.set_xticks(range(n_cols))
+    ax.set_xticklabels(functions)
+    ax.xaxis.set_label_position("top")
+    ax.xaxis.tick_top()
+
+    ax.set_yticks(range(n_rows))
+    ax.set_yticklabels(row_labels, fontsize=8)
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    ax.legend(
+        handles=[small_handle, big_handle],
+        loc="upper left",
+        bbox_to_anchor=(1.0, 1.0),
+        frameon=False,
+        fontsize=9,
+        borderaxespad=0,
+    )
+
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
 def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectories_dir: Path, results_root: Path) -> None:
     if results_df.empty:
         raise ValueError("No best-epoch results found in the provided results directory")
@@ -1457,6 +1617,7 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     if not _CONVERGENCE_STATS.empty:
         _plot_convergence_removal(_CONVERGENCE_STATS, output_dir / "convergence_removal.pgf")
         generate_convergence_report(_CONVERGENCE_STATS, output_dir / "convergence_removal.tex")
+        _plot_convergence_removal_dots(trajectories_dir, output_dir / "convergence_removal_dots.pgf")
 
     auprc_random_baseline = (
         float(results_df["num_gt"].mean()) / 1013
