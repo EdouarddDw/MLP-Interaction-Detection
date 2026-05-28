@@ -435,9 +435,10 @@ def _plot_grouped_bars(
         else str(v)
         for v in x_values
     ], rotation=15, ha="right")
-    ax.set_ylim(0.0, None)
-    ax.set_ylim(top=max_val * 1.15)
-    ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
+    ax.set_ylim(0, 1)
+    #ax.set_ylim(top=max_val * 1.15)
+    if auprc_random_baseline >= 0.25:
+        ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
     ax.yaxis.grid(True)
     ax.set_axisbelow(True)
     ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
@@ -515,9 +516,10 @@ def _plot_architecture_x_regularization(results_df: pd.DataFrame, output_path: P
         rotation=15,
         ha="right",
     )
-    ax.set_ylim(0.0, None)
-    ax.set_ylim(top=max_val * 1.15)
-    ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
+    ax.set_ylim(0, 1)
+   #ax.set_ylim(top=max_val * 1.15)
+    if auprc_random_baseline >= 0.25:
+        ax.axhline(auprc_random_baseline, color="gray", linestyle=":", linewidth=0.8, label="random baseline")
     ax.yaxis.grid(True)
     ax.set_axisbelow(True)
     ax.legend(frameon=False, ncol=1, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
