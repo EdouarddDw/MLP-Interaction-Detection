@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-
+import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -65,8 +65,8 @@ def collect_epoch_level_results(results_path: Path = Path("results/auroc_by_epoc
     results_df = pd.read_csv(results_path)
     if "val_loss" in results_df.columns:
         results_df["val_loss"] = pd.to_numeric(results_df["val_loss"], errors="coerce")
-        traj_max = results_df.groupby(["function_name", "experiment_name"])["val_loss"].transform("max")
-        traj_min = results_df.groupby(["function_name", "experiment_name"])["val_loss"].transform("min")
+        traj_max = results_df.groupby(["function_name", "experiment"])["val_loss"].transform("max")
+        traj_min = results_df.groupby(["function_name", "experiment"])["val_loss"].transform("min")
         converged = (traj_max - traj_min) / traj_max.replace(0, np.nan) >= 0.05
         n_removed = (~converged.fillna(True)).sum()
         if n_removed > 0:
