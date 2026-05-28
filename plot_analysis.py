@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Compute epoch-level AUROC results and generate summary plots."""
+"""Generate epoch-level AUROC summary plots from results/auroc_by_epoch.csv."""
 
 from __future__ import annotations
 
@@ -8,14 +8,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from analysis import (
-    compute_auroc_data,
-    compute_metrics,
-    get_ground_truth_interactions,
-    load_model_and_interactions,
-)
-from config import EXPERIMENTS
-from synth import functions
 from thesis_plots import _save_pgf, _setup_thesis_style
 
 
@@ -30,19 +22,6 @@ _LINE_STYLES = [
     ("#7f7f7f", (0, (3, 5, 1, 5))), ("#bcbd22", "-"),
     ("#17becf", "--"),
 ]
-
-
-def _sorted_epoch_checkpoints(snapshot_dir: Path) -> list[Path]:
-    checkpoint_paths = list(snapshot_dir.glob("epoch_*.pt"))
-
-    def _epoch_key(path: Path) -> int:
-        stem = path.stem
-        try:
-            return int(stem.split("_")[-1])
-        except ValueError:
-            return -1
-
-    return sorted(checkpoint_paths, key=_epoch_key)
 
 
 def _regularization_category(dropout: float, weight_decay: bool) -> str:
@@ -80,103 +59,21 @@ def _group_sort_key(group_column: str, value):
     return (0, str(value))
 
 
-def _get_ground_truth(function, noise: float, num_samples: int, seed: int):
-    return get_ground_truth_interactions(function, num_samples=num_samples, noise=noise, seed=seed)
-
-
-def collect_epoch_level_results(snapshot_root=Path("snapshots_clean"), num_samples: int = 30000, seed: int = 42) -> pd.DataFrame:
-    rows = []
-    gt_cache: dict[tuple[str, float, int, int], set[frozenset[int]]] = {}
-
-    for function in functions:
-        function_name = function.__name__
-
-        for experiment in EXPERIMENTS:
-            experiment_name = experiment["name"]
-            noise = experiment["noise"]
-            optimizer = experiment["optimizer"]
-            dropout = float(experiment["dropout"])
-            weight_decay = bool(experiment["weight_decay"])
-
-            snapshot_dir = Path(snapshot_root) / function_name / experiment_name
-            checkpoint_paths = _sorted_epoch_checkpoints(snapshot_dir)
-            if not checkpoint_paths:
-                continue
-
-            gt_key = (function_name, noise, num_samples, seed)
-            if gt_key not in gt_cache:
-                gt_cache[gt_key] = _get_ground_truth(function, noise, num_samples, seed)
-            gt_interactions = gt_cache[gt_key]
-
-            for checkpoint_path in checkpoint_paths:
-                model, nid_interactions, val_loss, epoch = load_model_and_interactions(
-                    checkpoint_path,
-                    dropout=dropout,
-                )
-
-                row = {
-                    "function_name": function_name,
-                    "experiment_name": experiment_name,
-                    "optimizer": optimizer,
-                    "noise": noise,
-                    "dropout": dropout,
-                    "weight_decay": weight_decay,
-                    "regularization_category": _regularization_category(dropout, weight_decay),
-                    "epoch": epoch,
-                    "val_loss": val_loss,
-                    "snapshot_path": str(checkpoint_path),
-                    "auroc": None,
-                    "precision": None,
-                    "recall": None,
-                    "success": False,
-                }
-
-                if model is None or nid_interactions is None:
-                    rows.append(row)
-                    continue
-
-                # Epoch-level trajectories use restricted AUROC only; auroc_full is not
-                # written to auroc_by_epoch.csv and is not needed by this module.
-                # Restricted evaluation (G∪D) used for trajectory AUROC
-                scores, labels = compute_auroc_data(gt_interactions, nid_interactions)
-                if scores is None:
-                    rows.append({**row, "success": True})
-                    continue
-
-                metrics = compute_metrics(scores, labels)
-                row.update(
-                    {
-                        "auroc": metrics["auroc"],
-                        "precision": metrics["precision"],
-                        "recall": metrics["recall"],
-                        "success": True,
-                    }
-                )
-                rows.append(row)
-
-    results_df = pd.DataFrame(rows)
-    if not results_df.empty:
-        results_df = results_df.sort_values(
-            ["function_name", "experiment_name", "epoch"],
-            kind="mergesort",
-        ).reset_index(drop=True)
-    return results_df
-
-
-def save_epoch_results(results_df: pd.DataFrame, output_path: Path = EPOCH_RESULTS_CSV) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    results_df.to_csv(output_path, index=False)
+def collect_epoch_level_results(results_path: Path = Path("results/auroc_by_epoch.csv")) -> pd.DataFrame:
+    if not results_path.exists():
+        raise FileNotFoundError(f"auroc_by_epoch.csv not found at {results_path} — run analysis.py first")
+    return pd.read_csv(results_path)
 
 
 def _summary_by_epoch(df: pd.DataFrame, group_column: str) -> pd.DataFrame:
-    clean = df.dropna(subset=["auroc"])
+    clean = df.dropna(subset=["auprc_full"])
     function_level = (
-        clean.groupby(["function_name", group_column, "epoch"], as_index=False)["auroc"]
+        clean.groupby(["function_name", group_column, "epoch"], as_index=False)["auprc_full"]
         .mean()
-        .rename(columns={"auroc": "function_mean_auroc"})
+        .rename(columns={"auprc_full": "function_mean_auprc"})
     )
     summary = (
-        function_level.groupby([group_column, "epoch"], as_index=False)["function_mean_auroc"]
+        function_level.groupby([group_column, "epoch"], as_index=False)["function_mean_auprc"]
         .agg(mean="mean", std="std", count="count")
     )
     summary["std"] = summary["std"].fillna(0.0)
@@ -190,7 +87,7 @@ def _plot_grouped_lines(
     group_column: str,
     title: str,
     output_path: Path,
-    ylabel: str = "AUROC",
+    ylabel: str = r"AUPRC ($2^{[10]}$)",
 ):
     """Plot one line per unique value of *group_column* from *summary_df*.
 
@@ -241,56 +138,71 @@ def generate_plots(results_df: pd.DataFrame, plots_dir: Path = PLOTS_DIR) -> Non
     _plot_grouped_lines(
         function_summary,
         "function_name",
-        "AUROC Through Epochs by Synthetic Function",
-        plots_dir / "auroc_by_function.pgf",
+        "AUPRC Through Epochs by Synthetic Function",
+        plots_dir / "auprc_by_function.pgf",
+        ylabel=r"AUPRC ($2^{[10]}$)",
     )
 
     optimizer_summary = _summary_by_epoch(results_df, "optimizer")
     _plot_grouped_lines(
         optimizer_summary,
         "optimizer",
-        "AUROC Through Epochs by Optimizer",
-        plots_dir / "auroc_by_optimizer.pgf",
+        "AUPRC Through Epochs by Optimizer",
+        plots_dir / "auprc_by_optimizer.pgf",
+        ylabel=r"AUPRC ($2^{[10]}$)",
     )
 
     noise_summary = _summary_by_epoch(results_df, "noise")
     _plot_grouped_lines(
         noise_summary,
         "noise",
-        "AUROC Through Epochs by Noise Level",
-        plots_dir / "auroc_by_noise.pgf",
+        "AUPRC Through Epochs by Noise Level",
+        plots_dir / "auprc_by_noise.pgf",
+        ylabel=r"AUPRC ($2^{[10]}$)",
     )
 
     regularization_summary = _summary_by_epoch(results_df, "regularization_category")
     _plot_grouped_lines(
         regularization_summary,
         "regularization_category",
-        "AUROC Through Epochs by Regularization Technique",
-        plots_dir / "auroc_by_regularization.pgf",
+        "AUPRC Through Epochs by Regularization Technique",
+        plots_dir / "auprc_by_regularization.pgf",
+        ylabel=r"AUPRC ($2^{[10]}$)",
     )
 
 
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Compute epoch-level AUROC results and generate summary plots")
+    parser = argparse.ArgumentParser(description="Generate epoch-level AUPRC summary plots")
     parser.add_argument(
-        "--snapshot-root",
-        default="snapshots_clean",
-        help="Root folder for snapshots (default: snapshots_clean, the post-migration layout)",
+        "--results-root",
+        default="results",
+        help="Root folder containing auroc_by_epoch.csv (default: results)",
+    )
+    parser.add_argument(
+        "--model-size",
+        default="small",
+        choices=["small", "big"],
+        help="Model size to plot (default: small)",
     )
     args = parser.parse_args()
-    snapshot_root = Path(args.snapshot_root)
+    results_root = Path(args.results_root)
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"Collecting epoch-level AUROC results from {snapshot_root}...")
-    results_df = collect_epoch_level_results(snapshot_root=snapshot_root)
-    print(f"Collected {len(results_df)} checkpoint rows.")
+    print(f"Loading epoch-level AUPRC results from {results_root / 'auroc_by_epoch.csv'}...")
+    results_df = collect_epoch_level_results(results_path=results_root / "auroc_by_epoch.csv")
+    print(f"Loaded {len(results_df)} rows.")
 
-    save_epoch_results(results_df)
-    print(f"Saved epoch-level results to {EPOCH_RESULTS_CSV}")
+    if "model_size" in results_df.columns:
+        results_df = results_df[results_df["model_size"] == args.model_size]
+
+    if "regularization_category" not in results_df.columns and "dropout" in results_df.columns:
+        results_df["regularization_category"] = [
+            _regularization_category(float(d), bool(w))
+            for d, w in zip(results_df["dropout"], results_df["weight_decay"])
+        ]
 
     print("Generating plots...")
     generate_plots(results_df)

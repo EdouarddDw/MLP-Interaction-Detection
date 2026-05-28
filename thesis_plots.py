@@ -627,42 +627,28 @@ def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path
 def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path: Path) -> None:
     """Plot AUPRC recovery trajectories across epochs.
 
-    Uses the restricted (G∪D) AUPRC column from trajectory CSVs, not auprc_full.
-    Full-space AUPRC is too expensive to compute at every epoch checkpoint.
+    Uses full-space AUPRC over all 1013 candidates in $2^{[10]}$, not restricted G∪D.
     """
     if not trajectories_dir.exists() or not trajectories_dir.is_dir():
         return
 
-    # Collect trajectory files from model-size subdirs, falling back to flat layout
-    trajectory_files: list[tuple[str, Path]] = []
-    for subdir_name in ("small", "big"):
-        subdir = trajectories_dir / subdir_name
-        if subdir.exists():
-            found = sorted(subdir.glob("*_trajectory.csv"))
-            print(f"  [trajectories] {subdir_name}/: {len(found)} file(s)")
-            for p in found:
-                trajectory_files.append((subdir_name, p))
-        else:
-            print(f"  [trajectories] {subdir_name}/: directory not found")
-    if not trajectory_files:
-        flat_found = sorted(trajectories_dir.glob("*_trajectory.csv"))
-        print(f"  [trajectories] flat fallback: {len(flat_found)} file(s)")
-        for p in flat_found:
-            trajectory_files.append(("unknown", p))
-    if not trajectory_files:
+    # Collect trajectory files from flat directory layout
+    trajectory_files_with_size: list[tuple[str, Path]] = []
+    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv"))
+    for path in trajectory_files:
+        model_size = path.name.split("_")[0]  # "small" or "big"
+        trajectory_files_with_size.append((model_size, path))
+    print(f"  [trajectories] {len(trajectory_files_with_size)} file(s)")
+    if not trajectory_files_with_size:
         return
 
     frames: list[pd.DataFrame] = []
-    for model_size, path in trajectory_files:
+    for model_size, path in trajectory_files_with_size:
         # auprc column in trajectory CSVs is restricted (G∪D) — see analyze_trajectory in analysis.py
         frame = pd.read_csv(path)
         if frame.empty:
             continue
         frame = frame.copy()
-        if "function_name" not in frame.columns and "function" in frame.columns:
-            frame = frame.rename(columns={"function": "function_name"})
-        if "experiment_name" not in frame.columns and "experiment" in frame.columns:
-            frame = frame.rename(columns={"experiment": "experiment_name"})
         if "model_size" not in frame.columns:
             frame["model_size"] = model_size
         frames.append(frame)
@@ -674,17 +660,17 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
     if plot_df.empty:
         return
 
-    required_columns = {"epoch", "auprc", "function_name", "noise", "dropout", "weight_decay"}
+    required_columns = {"epoch", "auprc_full", "function_name", "noise", "dropout", "weight_decay"}
     if not required_columns.issubset(plot_df.columns):
         return
 
     plot_df = plot_df.copy()
     plot_df["epoch"] = pd.to_numeric(plot_df["epoch"], errors="coerce")
-    plot_df["auprc"] = pd.to_numeric(plot_df["auprc"], errors="coerce")
+    plot_df["auprc_full"] = pd.to_numeric(plot_df["auprc_full"], errors="coerce")
     plot_df["noise"] = pd.to_numeric(plot_df["noise"], errors="coerce")
     plot_df["dropout"] = pd.to_numeric(plot_df["dropout"], errors="coerce")
     plot_df["weight_decay"] = plot_df["weight_decay"].astype(bool)
-    plot_df = plot_df.dropna(subset=["epoch", "auprc", "function_name", "noise", "dropout"])
+    plot_df = plot_df.dropna(subset=["epoch", "auprc_full", "function_name", "noise", "dropout"])
 
     plot_df["regularization_state"] = [
         _regularization_state(dropout, weight_decay)
@@ -731,14 +717,15 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
             ].copy()
 
             if not cell_df.empty:
+                cell_df = cell_df[cell_df["epoch"] > 1].copy()
                 function_epoch = (
-                    cell_df.groupby(["function_name", "epoch"], as_index=False)["auprc"]
+                    cell_df.groupby(["function_name", "epoch"], as_index=False)["auprc_full"]
                     .mean()
                 )
                 if not function_epoch.empty:
                     function_names = sorted(function_epoch["function_name"].dropna().unique(), key=_function_sort_key)
                     pivot = (
-                        function_epoch.pivot(index="epoch", columns="function_name", values="auprc")
+                        function_epoch.pivot(index="epoch", columns="function_name", values="auprc_full")
                         .reindex(all_epochs)
                     )
 
@@ -774,11 +761,12 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
                             x_values,
                             mean_values,
                             color="#2A6F97",
-                            linewidth=1.8,
-                            zorder=3,
+                            linewidth=2.2,
+                            zorder=5,
                         )
 
             ax.set_ylim(0.0, 1.0)
+            ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
             if row_index == 0:
                 ax.set_title(_pretty_regularization_label(reg_state), fontsize=10)
             if row_index < len(NOISE_ORDER) - 1:
@@ -787,9 +775,6 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
                 ax.set_xlabel("Epoch")
             if col_index > 0:
                 ax.tick_params(labelleft=False)
-                ax.set_ylabel("")
-            else:
-                ax.set_ylabel(r"AUPRC (restricted, $\mathcal{G} \cup \mathcal{D}$)")
 
             if col_index == len(REGULARIZATION_ORDER) - 1:
                 ax.text(
@@ -802,6 +787,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
                     fontsize=10,
                 )
 
+    fig.supylabel(r"AUPRC ($2^{[10]}$)", fontsize=9)
     fig.tight_layout()
     _save_pgf(fig, output_path)
     plt.close(fig)
@@ -812,31 +798,23 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
     if not trajectories_dir.exists() or not trajectories_dir.is_dir():
         return pd.DataFrame(columns=_EMPTY_COLS)
 
-    # Collect trajectory files from model-size subdirs, falling back to flat layout
-    trajectory_files: list[tuple[str, Path]] = []
-    for subdir_name in ("small", "big"):
-        subdir = trajectories_dir / subdir_name
-        if subdir.exists():
-            for p in sorted(subdir.glob("*_trajectory.csv")):
-                trajectory_files.append((subdir_name, p))
-    if not trajectory_files:
-        for p in sorted(trajectories_dir.glob("*_trajectory.csv")):
-            trajectory_files.append(("unknown", p))
-    if not trajectory_files:
+    # Collect trajectory files from flat directory layout
+    trajectory_files_with_size: list[tuple[str, Path]] = []
+    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv"))
+    for path in trajectory_files:
+        model_size = path.name.split("_")[0]  # "small" or "big"
+        trajectory_files_with_size.append((model_size, path))
+    print(f"  [trajectories] {len(trajectory_files_with_size)} file(s)")
+    if not trajectory_files_with_size:
         return pd.DataFrame(columns=_EMPTY_COLS)
 
     rows = []
-    for model_size, path in trajectory_files:
+    for model_size, path in trajectory_files_with_size:
         frame = pd.read_csv(path)
         if frame.empty or "auroc" not in frame.columns or "epoch" not in frame.columns:
             continue
 
-        if "function" not in frame.columns and "function_name" in frame.columns:
-            frame = frame.rename(columns={"function_name": "function"})
-        if "experiment" not in frame.columns and "experiment_name" in frame.columns:
-            frame = frame.rename(columns={"experiment_name": "experiment"})
-
-        required_columns = {"function", "experiment", "noise", "dropout", "weight_decay"}
+        required_columns = {"function_name", "experiment", "noise", "dropout", "weight_decay"}
         if not required_columns.issubset(frame.columns):
             continue
 
@@ -850,7 +828,7 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
         else:
             weight_decay = frame["weight_decay"].astype(str).str.lower().isin(["true", "1", "yes"])
         frame["weight_decay"] = weight_decay
-        frame = frame.dropna(subset=["epoch", AUROC_COLUMN, "function", "experiment", "noise", "dropout"])
+        frame = frame.dropna(subset=["epoch", AUROC_COLUMN, "function_name", "experiment", "noise", "dropout"])
         if frame.empty:
             continue
 
@@ -866,7 +844,7 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
         row_model_size = peak_row["model_size"] if "model_size" in frame.columns else model_size
         rows.append(
             {
-                "function": peak_row["function"],
+                "function": peak_row["function_name"],
                 "experiment": peak_row["experiment"],
                 "noise": float(peak_row["noise"]),
                 "regularization_state": regularization_state,
@@ -1199,7 +1177,7 @@ def _plot_evaluation_space_comparison(results_df: pd.DataFrame, output_path: Pat
     plt.close(fig)
 
 
-def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) -> None:
+def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, model_size: str = "small") -> None:
     if not epoch_results_path.exists():
         warnings.warn(
             f"Epoch results file not found: {epoch_results_path}. "
@@ -1213,7 +1191,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
         warnings.warn(f"Epoch results file is empty: {epoch_results_path}")
         return
 
-    required_cols = {"epoch", "auroc", "val_loss", "function_name", "noise", "dropout", "weight_decay"}
+    required_cols = {"epoch", "auroc", "val_loss", "function_name", "noise", "dropout", "weight_decay", "model_size"}
     if not required_cols.issubset(df.columns):
         warnings.warn(f"Missing columns in epoch results: {required_cols - set(df.columns)}")
         return
@@ -1230,6 +1208,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path) 
     ]
 
     df = df[df["regularization_state"] == "base"].copy()
+    df = df[df["model_size"] == model_size].copy()
     df = df[df["noise"].isin([0.0, 1.0])].copy()
     df = df.dropna(subset=["epoch", AUROC_COLUMN, "val_loss", "function_name"])
 
@@ -1422,6 +1401,7 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     _plot_loss_vs_auroc_divergence(
         epoch_results_path=results_root / "auroc_by_epoch.csv",
         output_path=output_dir / "loss_vs_auroc_divergence.pgf",
+        model_size="small",
     )
 
     def _function_sort_key(name: str):
