@@ -1,0 +1,54 @@
+\begin{longtable}{llllcc}
+\caption{Runs removed by convergence filter (validation loss did not decrease by $\geq 5\%$).}
+\label{tab:convergence_removed} \\
+\toprule
+Model & Noise & Regularisation & Total runs & Removed & Removed (\%) \\
+\midrule
+\endfirsthead
+\toprule
+Model & Noise & Regularisation & Total runs & Removed & Removed (\%) \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+small & 0 & Base & 20 & 0 & 0.0 \\
+small & 0 & Dropout & 10 & 4 & 40.0 \\
+small & 0 & Weight decay & 10 & 0 & 0.0 \\
+\textbf{small} & \textbf{0} & \textbf{Dropout + weight decay} & \textbf{10} & \textbf{6} & \textbf{60.0} \\
+small & 0.1 & Base & 20 & 0 & 0.0 \\
+small & 0.1 & Dropout & 20 & 3 & 15.0 \\
+small & 0.1 & Weight decay & 20 & 0 & 0.0 \\
+small & 0.1 & Dropout + weight decay & 20 & 2 & 10.0 \\
+small & 0.2 & Base & 20 & 0 & 0.0 \\
+small & 0.2 & Dropout & 20 & 7 & 35.0 \\
+small & 0.2 & Weight decay & 20 & 1 & 5.0 \\
+small & 0.2 & Dropout + weight decay & 20 & 6 & 30.0 \\
+small & 0.5 & Base & 20 & 2 & 10.0 \\
+small & 0.5 & Dropout & 20 & 1 & 5.0 \\
+small & 0.5 & Weight decay & 20 & 1 & 5.0 \\
+small & 0.5 & Dropout + weight decay & 20 & 4 & 20.0 \\
+small & 1 & Base & 20 & 10 & 50.0 \\
+small & 1 & Dropout & 20 & 7 & 35.0 \\
+small & 1 & Weight decay & 20 & 9 & 45.0 \\
+small & 1 & Dropout + weight decay & 20 & 9 & 45.0 \\
+big & 0 & Base & 20 & 0 & 0.0 \\
+big & 0 & Dropout & 10 & 4 & 40.0 \\
+big & 0 & Weight decay & 10 & 0 & 0.0 \\
+\textbf{big} & \textbf{0} & \textbf{Dropout + weight decay} & \textbf{10} & \textbf{6} & \textbf{60.0} \\
+big & 0.1 & Base & 20 & 0 & 0.0 \\
+big & 0.1 & Dropout & 20 & 3 & 15.0 \\
+big & 0.1 & Weight decay & 20 & 0 & 0.0 \\
+big & 0.1 & Dropout + weight decay & 20 & 2 & 10.0 \\
+big & 0.2 & Base & 20 & 0 & 0.0 \\
+big & 0.2 & Dropout & 20 & 7 & 35.0 \\
+big & 0.2 & Weight decay & 20 & 1 & 5.0 \\
+big & 0.2 & Dropout + weight decay & 20 & 6 & 30.0 \\
+big & 0.5 & Base & 20 & 2 & 10.0 \\
+big & 0.5 & Dropout & 20 & 1 & 5.0 \\
+big & 0.5 & Weight decay & 20 & 1 & 5.0 \\
+big & 0.5 & Dropout + weight decay & 20 & 4 & 20.0 \\
+big & 1 & Base & 20 & 10 & 50.0 \\
+big & 1 & Dropout & 20 & 7 & 35.0 \\
+big & 1 & Weight decay & 20 & 9 & 45.0 \\
+big & 1 & Dropout + weight decay & 20 & 9 & 45.0 \\
+\end{longtable}

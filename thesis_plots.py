@@ -41,31 +41,53 @@ REGULARIZATION_ORDER = [
 MODEL_SIZE_ORDER = ["small", "big"]
 COMPARISON_FUNCTIONS = [f"f{i}" for i in range(1, 11)]
 
+_CONVERGENCE_STATS: pd.DataFrame = pd.DataFrame()
 
-def _filter_convergent_runs(df: pd.DataFrame, val_loss_col: str = "val_loss", min_reduction: float = 0.05) -> pd.DataFrame:
-    """
-    Exclude runs where validation loss did not decrease by at least min_reduction
-    (default 5%) between epoch 1 and the best epoch. Applied to best-epoch results
-    only — trajectory filtering is handled separately.
-    A run is kept if: (val_loss_epoch1 - val_loss_final) / val_loss_epoch1 >= min_reduction.
-    Runs with missing val_loss are kept to avoid silent data loss.
-    """
-    if val_loss_col not in df.columns:
+
+def _filter_convergent_runs(df: pd.DataFrame, trajectories_dir: Path, min_reduction: float = 0.05) -> pd.DataFrame:
+    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv")) if trajectories_dir.exists() else []
+    frames: list[pd.DataFrame] = []
+    for path in trajectory_files:
+        model_size = path.name.split("_")[0]
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        if "model_size" not in frame.columns:
+            frame["model_size"] = model_size
+        frames.append(frame)
+
+    if not frames:
         return df
-    valid = df[val_loss_col].notna()
-    if not valid.any():
-        return df
-    # val_loss in best-epoch CSVs is already the best (minimum) val_loss achieved.
-    # We need epoch-1 val_loss to compute reduction — approximate using the 95th
-    # percentile of val_loss within each (function_name, experiment) group as a
-    # proxy for starting loss, since we don't have epoch-1 stored here.
-    # More precisely: keep rows where val_loss < 0.95 * group_max_val_loss.
+
+    traj_df = pd.concat(frames, ignore_index=True)
+    traj_df["epoch"] = pd.to_numeric(traj_df["epoch"], errors="coerce")
+    traj_df["val_loss"] = pd.to_numeric(traj_df["val_loss"], errors="coerce")
+    traj_df = traj_df.dropna(subset=["epoch", "val_loss"])
+
+    convergent_keys: set[tuple] = set()
+    for (function_name, experiment), group in traj_df.groupby(["function_name", "experiment"]):
+        start_rows = group.loc[group["epoch"] == group["epoch"].min(), "val_loss"]
+        end_rows = group.loc[group["epoch"] == group["epoch"].max(), "val_loss"]
+        if start_rows.empty or end_rows.empty:
+            continue
+        start_loss = float(start_rows.iloc[0])
+        end_loss = float(end_rows.iloc[0])
+        if start_loss <= 0 or (start_loss - end_loss) / start_loss < min_reduction:
+            continue
+        convergent_keys.add((function_name, experiment))
+
     group_col = "experiment_name" if "experiment_name" in df.columns else "experiment"
-    group_max = df.groupby(["function_name", group_col])[val_loss_col].transform("max")
-    keep = (~valid) | (df[val_loss_col] < (1 - min_reduction) * group_max)
-    n_removed = (~keep).sum()
-    if n_removed > 0:
-        print(f"  [convergence filter] removed {n_removed} non-convergent runs ({n_removed/len(df)*100:.1f}%)")
+    keep = df.apply(
+        lambda row: (
+            True
+            if pd.isna(row.get("function_name")) or pd.isna(row.get(group_col))
+            else (row["function_name"], row[group_col]) in convergent_keys
+        ),
+        axis=1,
+    )
+    n_removed = int((~keep).sum())
+    print(f"  [convergence filter] removed {n_removed} runs ({n_removed/len(df)*100:.1f}%) based on trajectory val_loss")
     return df[keep].copy()
 
 
@@ -148,7 +170,70 @@ def _read_analysis_csvs(folder: Path, model_size: str) -> list[pd.DataFrame]:
     return frames
 
 
-def load_best_epoch_results(results_root: Path) -> pd.DataFrame:
+def compute_convergence_stats(df: pd.DataFrame, trajectories_dir: Path, min_reduction: float = 0.05) -> pd.DataFrame:
+    """
+    Given the raw (unfiltered) best-epoch dataframe, return a summary of which
+    experiments were flagged as non-convergent based on trajectory val_loss.
+    Returns a DataFrame with columns:
+      noise, regularization_state, model_size, total, removed, pct_removed
+    """
+    _empty = pd.DataFrame(columns=["noise", "regularization_state", "model_size", "total", "removed", "pct_removed"])
+    if "regularization_state" not in df.columns:
+        return _empty
+
+    trajectory_files = sorted(trajectories_dir.glob("*_trajectory.csv")) if trajectories_dir.exists() else []
+    frames: list[pd.DataFrame] = []
+    for path in trajectory_files:
+        model_size = path.name.split("_")[0]
+        frame = pd.read_csv(path)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        if "model_size" not in frame.columns:
+            frame["model_size"] = model_size
+        frames.append(frame)
+
+    if not frames:
+        return _empty
+
+    traj_df = pd.concat(frames, ignore_index=True)
+    traj_df["epoch"] = pd.to_numeric(traj_df["epoch"], errors="coerce")
+    traj_df["val_loss"] = pd.to_numeric(traj_df["val_loss"], errors="coerce")
+    traj_df = traj_df.dropna(subset=["epoch", "val_loss"])
+
+    convergent_keys: set[tuple] = set()
+    for (function_name, experiment), group in traj_df.groupby(["function_name", "experiment"]):
+        start_rows = group.loc[group["epoch"] == group["epoch"].min(), "val_loss"]
+        end_rows = group.loc[group["epoch"] == group["epoch"].max(), "val_loss"]
+        if start_rows.empty or end_rows.empty:
+            continue
+        start_loss = float(start_rows.iloc[0])
+        end_loss = float(end_rows.iloc[0])
+        if start_loss <= 0 or (start_loss - end_loss) / start_loss < min_reduction:
+            continue
+        convergent_keys.add((function_name, experiment))
+
+    group_col = "experiment_name" if "experiment_name" in df.columns else "experiment"
+    keep = df.apply(
+        lambda row: (
+            True
+            if pd.isna(row.get("function_name")) or pd.isna(row.get(group_col))
+            else (row["function_name"], row[group_col]) in convergent_keys
+        ),
+        axis=1,
+    )
+    tmp = df[["noise", "regularization_state", "model_size"]].copy()
+    tmp["_keep"] = keep
+    summary = (
+        tmp.groupby(["noise", "regularization_state", "model_size"])
+        .agg(total=("_keep", "count"), removed=("_keep", lambda x: (~x).sum()))
+        .reset_index()
+    )
+    summary["pct_removed"] = summary["removed"] / summary["total"] * 100
+    return summary.sort_values("pct_removed", ascending=False).reset_index(drop=True)
+
+
+def load_best_epoch_results(results_root: Path, trajectories_dir: Path) -> pd.DataFrame:
     """Load best-epoch analysis CSVs from results/big and results/small.
 
     Prefer the structured subdirectories when available. Fall back to top-level
@@ -197,7 +282,9 @@ def load_best_epoch_results(results_root: Path) -> pd.DataFrame:
     df["regularization_label"] = df["regularization_state"].map(_pretty_regularization_label)
     df["noise_label"] = df["noise"].map(_pretty_noise_label)
     df["is_best_epoch_source"] = True
-    df = _filter_convergent_runs(df)
+    global _CONVERGENCE_STATS
+    _CONVERGENCE_STATS = compute_convergence_stats(df, trajectories_dir)
+    df = _filter_convergent_runs(df, trajectories_dir)
     return df
 
 
@@ -1242,6 +1329,123 @@ def _plot_summary_heatmap(results_df: pd.DataFrame, output_path: Path) -> None:
     plt.close(fig)
 
 
+def _plot_convergence_removal(stats_df: pd.DataFrame, output_path: Path) -> None:
+    if stats_df.empty:
+        return
+
+    _ensure_parent(output_path)
+
+    reg_colors = {
+        "base": "#2A6F97",
+        "dropout": "#E76F51",
+        "weight_decay": "#2A9D8F",
+        "dropout+weight_decay": "#7A5195",
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, 3.5), sharey=True)
+
+    bar_height = 0.18
+    n_reg = len(REGULARIZATION_ORDER)
+
+    for ax, model_size in zip(axes, MODEL_SIZE_ORDER):
+        size_df = stats_df[stats_df["model_size"] == model_size].copy()
+        y_positions = np.arange(len(NOISE_ORDER), dtype=float)
+
+        for reg_idx, reg_state in enumerate(REGULARIZATION_ORDER):
+            reg_df = size_df[size_df["regularization_state"] == reg_state]
+            widths = []
+            for noise_val in NOISE_ORDER:
+                match = reg_df[reg_df["noise"] == noise_val]
+                widths.append(float(match["pct_removed"].iloc[0]) if not match.empty else 0.0)
+
+            offset = (reg_idx - (n_reg - 1) / 2) * bar_height
+            ax.barh(
+                y_positions + offset,
+                widths,
+                height=bar_height * 0.9,
+                color=reg_colors.get(reg_state, "0.5"),
+                label=_pretty_regularization_label(reg_state),
+                alpha=0.9,
+            )
+
+        ax.axvline(0, color="gray", linestyle="--", linewidth=0.8)
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels([_pretty_noise_label(n) for n in NOISE_ORDER])
+        ax.set_xlabel("Runs removed (%)")
+        ax.set_title("Small model" if model_size == "small" else "Big model", fontsize=10)
+        ax.set_xlim(left=0)
+
+    axes[0].set_ylabel("Noise")
+    axes[-1].legend(
+        frameon=False,
+        ncol=1,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0,
+        fontsize=8,
+    )
+    fig.tight_layout()
+    _save_pgf(fig, output_path)
+    plt.close(fig)
+
+
+def generate_convergence_report(stats_df: pd.DataFrame, output_path: Path) -> None:
+    if stats_df.empty:
+        return
+
+    _ensure_parent(output_path)
+
+    size_order_map = {s: i for i, s in enumerate(MODEL_SIZE_ORDER)}
+    noise_order_map = {n: i for i, n in enumerate(NOISE_ORDER)}
+    reg_order_map = {r: i for i, r in enumerate(REGULARIZATION_ORDER)}
+
+    sorted_df = stats_df.copy()
+    sorted_df["_size_ord"] = sorted_df["model_size"].map(size_order_map).fillna(99)
+    sorted_df["_noise_ord"] = sorted_df["noise"].map(noise_order_map).fillna(99)
+    sorted_df["_reg_ord"] = sorted_df["regularization_state"].map(reg_order_map).fillna(99)
+    sorted_df = sorted_df.sort_values(["_size_ord", "_noise_ord", "_reg_ord"]).reset_index(drop=True)
+
+    lines = [
+        r"\begin{longtable}{llllcc}",
+        r"\caption{Runs removed by convergence filter (validation loss did not decrease by $\geq 5\%$).}",
+        r"\label{tab:convergence_removed} \\",
+        r"\toprule",
+        r"Model & Noise & Regularisation & Total runs & Removed & Removed (\%) \\",
+        r"\midrule",
+        r"\endfirsthead",
+        r"\toprule",
+        r"Model & Noise & Regularisation & Total runs & Removed & Removed (\%) \\",
+        r"\midrule",
+        r"\endhead",
+        r"\bottomrule",
+        r"\endfoot",
+    ]
+
+    for _, row in sorted_df.iterrows():
+        model = str(row["model_size"])
+        noise = _pretty_noise_label(float(row["noise"]))
+        reg = _pretty_regularization_label(str(row["regularization_state"]))
+        total = int(row["total"])
+        removed = int(row["removed"])
+        pct = float(row["pct_removed"])
+
+        if pct > 50:
+            parts = [
+                r"\textbf{" + model + "}",
+                r"\textbf{" + noise + "}",
+                r"\textbf{" + reg + "}",
+                r"\textbf{" + str(total) + "}",
+                r"\textbf{" + str(removed) + "}",
+                r"\textbf{" + f"{pct:.1f}" + "}",
+            ]
+        else:
+            parts = [model, noise, reg, str(total), str(removed), f"{pct:.1f}"]
+        lines.append(" & ".join(parts) + r" \\")
+
+    lines.extend([r"\end{longtable}", ""])
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectories_dir: Path, results_root: Path) -> None:
     if results_df.empty:
         raise ValueError("No best-epoch results found in the provided results directory")
@@ -1249,6 +1453,10 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     output_dir.mkdir(parents=True, exist_ok=True)
     # Set up style once at the beginning for all plots
     _setup_thesis_style()
+
+    if not _CONVERGENCE_STATS.empty:
+        _plot_convergence_removal(_CONVERGENCE_STATS, output_dir / "convergence_removal.pgf")
+        generate_convergence_report(_CONVERGENCE_STATS, output_dir / "convergence_removal.tex")
 
     auprc_random_baseline = (
         float(results_df["num_gt"].mean()) / 1013
@@ -1355,7 +1563,7 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     trajectories_dir = Path(args.trajectories_dir)
 
-    results_df = load_best_epoch_results(results_root)
+    results_df = load_best_epoch_results(results_root, trajectories_dir)
     if results_df.empty:
         raise SystemExit(f"No best-epoch analysis CSVs found under {results_root}")
 
