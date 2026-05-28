@@ -2,7 +2,7 @@
 """Generate thesis-ready summary plots from best-epoch analysis CSVs.
 
 This script reads the existing `results/big/` and `results/small/` analysis
-outputs, aggregates AUROC values across optimizers, and creates:
+outputs, aggregates AUPRC values across optimizers, and creates:
 - noise effect plots
 - regularisation effect plots
 - architecture comparison plots (big vs small)
@@ -28,10 +28,8 @@ from synth import functions as synth_functions
 
 
 # Primary metric: full-space AUPRC over all 1013 candidates in 2^[10].
-# AUROC_COLUMN is retained as a secondary metric; _plot_evaluation_space_comparison
-# uses both intentionally. See compute_auroc_data in analysis.py.
+# See compute_auroc_data in analysis.py.
 AUPRC_COLUMN = "auprc_full"
-AUROC_COLUMN = "auroc"
 
 NOISE_ORDER = [0.0, 0.1, 0.2, 0.5, 1.0]
 REGULARIZATION_ORDER = [
@@ -446,7 +444,7 @@ def _plot_dumbbell_comparison(summary: pd.DataFrame, output_path: Path) -> None:
     plt.close(fig)
 
 
-def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path, auprc_random_baseline: float = 0.0) -> None:
+def _plot_auprc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path, auprc_random_baseline: float = 0.0) -> None:
     if results_df.empty or "val_loss" not in results_df.columns:
         return
 
@@ -518,7 +516,7 @@ def _plot_auroc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path,
     plt.close(fig)
 
 
-def _plot_auroc_by_interaction_order(results_df: pd.DataFrame, output_path: Path, auprc_random_baseline: float = 0.0) -> None:
+def _plot_auprc_by_interaction_order(results_df: pd.DataFrame, output_path: Path, auprc_random_baseline: float = 0.0) -> None:
     """
     Plot AUROC grouped by interaction order and regularization state.
     
@@ -794,7 +792,7 @@ def _plot_interaction_recovery_trajectories(trajectories_dir: Path, output_path:
 
 
 def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
-    _EMPTY_COLS = ["function", "experiment", "noise", "regularization_state", "peak_auroc_epoch", "peak_auroc", "model_size"]
+    _EMPTY_COLS = ["function", "experiment", "noise", "regularization_state", "peak_auprc_epoch", "peak_auprc", "model_size"]
     if not trajectories_dir.exists() or not trajectories_dir.is_dir():
         return pd.DataFrame(columns=_EMPTY_COLS)
 
@@ -811,7 +809,7 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
     rows = []
     for model_size, path in trajectory_files_with_size:
         frame = pd.read_csv(path)
-        if frame.empty or "auroc" not in frame.columns or "epoch" not in frame.columns:
+        if frame.empty or "auprc_full" not in frame.columns or "epoch" not in frame.columns:
             continue
 
         required_columns = {"function_name", "experiment", "noise", "dropout", "weight_decay"}
@@ -820,7 +818,7 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
 
         frame = frame.copy()
         frame["epoch"] = pd.to_numeric(frame["epoch"], errors="coerce")
-        frame["auroc"] = pd.to_numeric(frame["auroc"], errors="coerce")
+        frame["auprc_full"] = pd.to_numeric(frame["auprc_full"], errors="coerce")
         frame["noise"] = pd.to_numeric(frame["noise"], errors="coerce")
         frame["dropout"] = pd.to_numeric(frame["dropout"], errors="coerce")
         if frame["weight_decay"].dtype == bool:
@@ -828,12 +826,11 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
         else:
             weight_decay = frame["weight_decay"].astype(str).str.lower().isin(["true", "1", "yes"])
         frame["weight_decay"] = weight_decay
-        frame = frame.dropna(subset=["epoch", AUROC_COLUMN, "function_name", "experiment", "noise", "dropout"])
+        frame = frame.dropna(subset=["epoch", "auprc_full", "function_name", "experiment", "noise", "dropout"])
         if frame.empty:
             continue
 
-        # peak_auroc is restricted AUROC (G∪D)
-        peak_index = frame["auroc"].idxmax()
+        peak_index = frame["auprc_full"].idxmax()
         peak_row = frame.loc[peak_index]
         regularization_state = _regularization_state(float(peak_row["dropout"]), bool(peak_row["weight_decay"]))
         if regularization_state not in REGULARIZATION_ORDER:
@@ -848,8 +845,8 @@ def compute_peak_auroc_epoch_summary(trajectories_dir: Path) -> pd.DataFrame:
                 "experiment": peak_row["experiment"],
                 "noise": float(peak_row["noise"]),
                 "regularization_state": regularization_state,
-                "peak_auroc_epoch": int(float(peak_row["epoch"])),
-                "peak_auroc": float(peak_row["auroc"]),
+                "peak_auprc_epoch": int(float(peak_row["epoch"])),
+                "peak_auprc": float(peak_row["auprc_full"]),
                 "model_size": row_model_size,
             }
         )
@@ -870,9 +867,9 @@ def _plot_peak_epoch_vs_noise(summary_df: pd.DataFrame, output_path: Path) -> No
         return
 
     function_level = (
-        summary_df.groupby(["function", "noise", "regularization_state"], as_index=False)["peak_auroc_epoch"]
+        summary_df.groupby(["function", "noise", "regularization_state"], as_index=False)["peak_auprc_epoch"]
         .mean()
-        .rename(columns={"peak_auroc_epoch": "function_mean_peak_epoch"})
+        .rename(columns={"peak_auprc_epoch": "function_mean_peak_epoch"})
     )
     if function_level.empty:
         return
@@ -928,7 +925,7 @@ def _plot_peak_epoch_vs_noise(summary_df: pd.DataFrame, output_path: Path) -> No
         )
 
     ax.set_xlabel("Noise level")
-    ax.set_ylabel("Mean epoch of peak AUROC")
+    ax.set_ylabel("Mean epoch of peak AUPRC")
     ax.set_xticks(NOISE_ORDER)
     ax.set_xticklabels([_pretty_noise_label(noise) for noise in NOISE_ORDER])
     ax.set_ylim(bottom=0)
@@ -948,9 +945,9 @@ def generate_peak_epoch_table(summary_df: pd.DataFrame, output_path: Path) -> No
         return
 
     function_level = (
-        summary_df.groupby(["function", "noise", "regularization_state"], as_index=False)["peak_auroc_epoch"]
+        summary_df.groupby(["function", "noise", "regularization_state"], as_index=False)["peak_auprc_epoch"]
         .mean()
-        .rename(columns={"peak_auroc_epoch": "function_mean_peak_epoch"})
+        .rename(columns={"peak_auprc_epoch": "function_mean_peak_epoch"})
     )
     if function_level.empty:
         return
@@ -992,7 +989,7 @@ def generate_peak_epoch_table(summary_df: pd.DataFrame, output_path: Path) -> No
     lines.extend([
         r"\bottomrule",
         r"\end{tabular}",
-        r"\caption{Mean epoch of peak AUROC across functions by noise level and regularization state.}",
+        r"\caption{Mean epoch of peak AUPRC across functions by noise level and regularization state.}",
         r"\end{table}",
         "",
     ])
@@ -1040,144 +1037,7 @@ def _plot_heatmap(ax, matrix: pd.DataFrame, title: str):
     return im
 
 
-# Intentionally compares both formulations — do not change to auroc_full only
-def _plot_evaluation_space_comparison(results_df: pd.DataFrame, output_path: Path) -> None:
-    if "auroc_full" not in results_df.columns or results_df["auroc_full"].notna().sum() == 0:
-        warnings.warn(
-            "auroc_full column not present or contains no non-null values; "
-            "skipping evaluation_space_comparison plot."
-        )
-        return
-
-    plot_df = results_df.dropna(subset=["auroc", "auroc_full"]).copy()
-    if plot_df.empty:
-        warnings.warn(
-            "No rows with both auroc and auroc_full non-null; "
-            "skipping evaluation_space_comparison plot."
-        )
-        return
-
-    _ensure_parent(output_path)
-
-    reg_colors = {
-        "base": "#2A6F97",
-        "dropout": "#E76F51",
-        "weight_decay": "#2A9D8F",
-        "dropout+weight_decay": "#7A5195",
-    }
-    reg_markers = {
-        "base": "o",
-        "dropout": "^",
-        "weight_decay": "s",
-        "dropout+weight_decay": "D",
-    }
-
-    fig, (ax_scatter, ax_hist) = plt.subplots(1, 2, figsize=(7.5, 3.2))
-
-    # --- Left panel: scatter ---
-    for reg_state in REGULARIZATION_ORDER:
-        subset = plot_df[plot_df["regularization_state"] == reg_state]
-        if subset.empty:
-            continue
-        ax_scatter.scatter(
-            subset["auroc"].to_numpy(dtype=float),
-            subset["auroc_full"].to_numpy(dtype=float),
-            s=12,
-            alpha=0.65,
-            color=reg_colors.get(reg_state, "0.5"),
-            marker=reg_markers.get(reg_state, "o"),
-            edgecolors="none",
-            label=_pretty_regularization_label(reg_state),
-            zorder=3,
-        )
-
-    ax_scatter.plot(
-        [0, 1], [0, 1],
-        color="gray",
-        linewidth=0.8,
-        linestyle="--",
-        label="perfect agreement",
-        zorder=2,
-    )
-
-    rho, _ = spearmanr(
-        plot_df["auroc"].to_numpy(dtype=float),
-        plot_df["auroc_full"].to_numpy(dtype=float),
-    )
-    ax_scatter.text(
-        0.97, 0.04,
-        rf"$\rho = {rho:.3f}$",
-        transform=ax_scatter.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        color="0.3",
-    )
-
-    ax_scatter.set_xlim(0, 1)
-    ax_scatter.set_ylim(0, 1)
-    ax_scatter.set_xlabel(r"Restricted AUROC ($\mathcal{G} \cup \mathcal{D}$)")
-    ax_scatter.set_ylabel(r"Full-space AUROC ($2^{[10]}$)")
-    ax_scatter.set_title("Agreement between evaluation formulations", fontsize=9)
-    ax_scatter.legend(
-        frameon=False,
-        fontsize=8,
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
-        borderaxespad=0,
-    )
-
-    # --- Right panel: difference histogram ---
-    delta = plot_df["auroc_full"].to_numpy(dtype=float) - plot_df["auroc"].to_numpy(dtype=float)
-
-    ax_hist.hist(
-        delta,
-        bins=40,
-        color="#2A6F97",
-        alpha=0.8,
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    ax_hist.axvline(0.0, color="gray", linestyle="--", linewidth=1.0)
-    mean_delta = float(np.mean(delta))
-    ax_hist.axvline(
-        mean_delta,
-        color="#E76F51",
-        linestyle="-",
-        linewidth=1.2,
-    )
-    ax_hist.set_xlim(left=-0.05)
-    ax_hist.text(
-        mean_delta + 0.01,
-        ax_hist.get_ylim()[1] * 0.92,
-        f"mean = {mean_delta:.3f}",
-        color="#E76F51",
-        fontsize=8,
-        va="top",
-    )
-    ax_hist.set_xlabel("Full-space AUROC\n$-$ Restricted AUROC")
-    ax_hist.set_ylabel("Count")
-    ax_hist.set_title("Distribution of AUROC difference", fontsize=9)
-
-    fig.text(
-        0.5,
-        -0.08,
-        r"Each point represents one experimental condition. "
-        r"Positive $\Delta$ indicates full-space AUROC exceeds restricted AUROC.",
-        ha="center",
-        va="top",
-        fontsize=8,
-        color="0.4",
-    )
-
-    fig.subplots_adjust(right=0.97)
-    fig.subplots_adjust(wspace=0.45)
-    fig.tight_layout()
-    _save_pgf(fig, output_path)
-    plt.close(fig)
-
-
-def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, model_size: str = "small") -> None:
+def _plot_loss_vs_auprc_divergence(epoch_results_path: Path, output_path: Path, model_size: str = "small") -> None:
     if not epoch_results_path.exists():
         warnings.warn(
             f"Epoch results file not found: {epoch_results_path}. "
@@ -1185,20 +1045,19 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
         )
         return
 
-    # auroc column is restricted (G∪D) — see collect_epoch_level_results in plot_analysis.py
     df = pd.read_csv(epoch_results_path)
     if df.empty:
         warnings.warn(f"Epoch results file is empty: {epoch_results_path}")
         return
 
-    required_cols = {"epoch", "auroc", "val_loss", "function_name", "noise", "dropout", "weight_decay", "model_size"}
+    required_cols = {"epoch", "auprc_full", "val_loss", "function_name", "noise", "dropout", "weight_decay", "model_size"}
     if not required_cols.issubset(df.columns):
         warnings.warn(f"Missing columns in epoch results: {required_cols - set(df.columns)}")
         return
 
     df = df.copy()
     df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce")
-    df["auroc"] = pd.to_numeric(df["auroc"], errors="coerce")
+    df["auprc_full"] = pd.to_numeric(df["auprc_full"], errors="coerce")
     df["val_loss"] = pd.to_numeric(df["val_loss"], errors="coerce")
     df["noise"] = pd.to_numeric(df["noise"], errors="coerce")
     df["dropout"] = pd.to_numeric(df["dropout"], errors="coerce")
@@ -1210,7 +1069,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
     df = df[df["regularization_state"] == "base"].copy()
     df = df[df["model_size"] == model_size].copy()
     df = df[df["noise"].isin([0.0, 1.0])].copy()
-    df = df.dropna(subset=["epoch", AUROC_COLUMN, "val_loss", "function_name"])
+    df = df.dropna(subset=["epoch", "auprc_full", "val_loss", "function_name"])
 
     if df.empty:
         warnings.warn("No data after filtering for noise=0/1 and base regularization.")
@@ -1223,7 +1082,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
 
     # Proxy artists for shared legend — empty so invisible in the plot itself
     loss_handle, = axes[0].plot([], [], color=color_loss, linewidth=1.6, label="Validation loss")
-    auroc_handle, = axes[0].plot([], [], color=color_auroc, linewidth=1.6, label="AUROC")
+    auprc_handle, = axes[0].plot([], [], color=color_auroc, linewidth=1.6, label=r"AUPRC ($2^{[10]}$)")
 
     for ax, noise_val in zip(axes, [0.0, 1.0]):
         ax.set_title(f"Noise = {_pretty_noise_label(noise_val)}")
@@ -1237,7 +1096,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
 
         # Stage 1: average within (function_name, epoch) across experiments/optimisers
         func_epoch = (
-            noise_df.groupby(["function_name", "epoch"], as_index=False)[[AUROC_COLUMN, "val_loss"]]
+            noise_df.groupby(["function_name", "epoch"], as_index=False)[["auprc_full", "val_loss"]]
             .mean()
         )
 
@@ -1249,27 +1108,27 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
             continue
 
         # Stage 2: aggregate across functions per epoch
-        auroc_agg = func_epoch.groupby("epoch")[AUROC_COLUMN].agg(mean="mean", std="std")
+        auprc_agg = func_epoch.groupby("epoch")["auprc_full"].agg(mean="mean", std="std")
         loss_agg = func_epoch.groupby("epoch")["val_loss"].agg(mean="mean", std="std")
         epoch_stats = pd.DataFrame({
-            "auroc_mean": auroc_agg["mean"],
-            "auroc_std": auroc_agg["std"].fillna(0.0),
+            "auprc_mean": auprc_agg["mean"],
+            "auprc_std": auprc_agg["std"].fillna(0.0),
             "loss_mean": loss_agg["mean"],
             "loss_std": loss_agg["std"].fillna(0.0),
         }).reset_index().sort_values("epoch")
 
         x = epoch_stats["epoch"].to_numpy(dtype=float)
-        auroc_mean = epoch_stats["auroc_mean"].to_numpy(dtype=float)
-        auroc_std = epoch_stats["auroc_std"].to_numpy(dtype=float)
+        auprc_mean = epoch_stats["auprc_mean"].to_numpy(dtype=float)
+        auprc_std = epoch_stats["auprc_std"].to_numpy(dtype=float)
         loss_mean = epoch_stats["loss_mean"].to_numpy(dtype=float)
         loss_std = epoch_stats["loss_std"].to_numpy(dtype=float)
 
-        # Find first epoch where AUROC reaches 95 % of its series maximum
+        # Find first epoch where AUPRC reaches 95 % of its series maximum
         plateau_epoch = None
-        valid_auroc = auroc_mean[~np.isnan(auroc_mean)]
+        valid_auroc = auprc_mean[~np.isnan(auprc_mean)]
         if len(valid_auroc) > 0:
             threshold = 0.95 * np.max(valid_auroc)
-            plateau_mask = auroc_mean >= threshold
+            plateau_mask = auprc_mean >= threshold
             if plateau_mask.any():
                 plateau_epoch = x[plateau_mask][0]
 
@@ -1278,12 +1137,12 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
         ax.fill_between(x, loss_mean - loss_std, loss_mean + loss_std,
                         color=color_loss, alpha=0.15, linewidth=0)
 
-        # Right axis: AUROC (twin)
+        # Right axis: AUPRC (twin)
         ax2 = ax.twinx()
-        ax2.plot(x, auroc_mean, color=color_auroc, linewidth=1.6)
-        ax2.fill_between(x, auroc_mean - auroc_std, auroc_mean + auroc_std,
+        ax2.plot(x, auprc_mean, color=color_auroc, linewidth=1.6)
+        ax2.fill_between(x, auprc_mean - auprc_std, auprc_mean + auprc_std,
                          color=color_auroc, alpha=0.15, linewidth=0)
-        ax2.set_ylabel("AUROC", color=color_auroc)
+        ax2.set_ylabel(r"AUPRC ($2^{[10]}$)", color=color_auroc)
         ax2.tick_params(axis="y", labelcolor=color_auroc)
         ax2.set_ylim(0.0, 1.0)
 
@@ -1292,7 +1151,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
             ax.text(
                 plateau_epoch,
                 0.97,
-                "AUROC plateau",
+                "AUPRC plateau",
                 transform=ax.get_xaxis_transform(),
                 ha="right",
                 va="top",
@@ -1302,7 +1161,7 @@ def _plot_loss_vs_auroc_divergence(epoch_results_path: Path, output_path: Path, 
             )
 
     fig.legend(
-        handles=[loss_handle, auroc_handle],
+        handles=[loss_handle, auprc_handle],
         loc="lower center",
         ncol=2,
         frameon=False,
@@ -1361,8 +1220,6 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         else 0.0
     )
 
-    _plot_evaluation_space_comparison(results_df, output_dir / "evaluation_space_comparison.pgf")
-
     noise_summary = _function_level_summary(results_df, ["model_size", "noise"])
     _plot_grouped_bars(
         noise_summary,
@@ -1385,9 +1242,9 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
 
     _plot_architecture_x_regularization(results_df, output_dir / "architecture_x_regularization.pgf", auprc_random_baseline=auprc_random_baseline)
 
-    _plot_auroc_vs_val_loss_scatter(results_df, output_dir / "auroc_vs_validation_loss.pgf", auprc_random_baseline=auprc_random_baseline)
+    _plot_auprc_vs_val_loss_scatter(results_df, output_dir / "auprc_vs_validation_loss.pgf", auprc_random_baseline=auprc_random_baseline)
 
-    _plot_auroc_by_interaction_order(results_df, output_dir / "auroc_by_interaction_order.pgf", auprc_random_baseline=auprc_random_baseline)
+    _plot_auprc_by_interaction_order(results_df, output_dir / "auprc_by_interaction_order.pgf", auprc_random_baseline=auprc_random_baseline)
 
     _plot_interaction_recovery_trajectories(
         trajectories_dir,
@@ -1398,9 +1255,9 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
     _plot_peak_epoch_vs_noise(peak_summary_df, output_dir / "peak_epoch_vs_noise.pgf")
     generate_peak_epoch_table(peak_summary_df, output_dir / "peak_epoch_table.tex")
 
-    _plot_loss_vs_auroc_divergence(
+    _plot_loss_vs_auprc_divergence(
         epoch_results_path=results_root / "auroc_by_epoch.csv",
-        output_path=output_dir / "loss_vs_auroc_divergence.pgf",
+        output_path=output_dir / "loss_vs_auprc_divergence.pgf",
         model_size="small",
     )
 
