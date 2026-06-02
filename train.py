@@ -39,6 +39,12 @@ base_parameters = {
     "main_effect_net_units": [10, 10, 10],
 }
 
+# ── Probe-sweep defaults (separate from EXPERIMENTS) ──────────────────────
+DEFAULT_DROPOUT_SWEEP   = [0.0, 0.1, 0.2, 0.3, 0.5]
+DEFAULT_L2_SWEEP        = [0.0, 1e-5, 1e-4, 1e-3, 1e-2]
+DEFAULT_PROBE_FUNCTIONS = ["f1", "f7", "f8"]
+# ──────────────────────────────────────────────────────────────────────────
+
 """need to add:
     - dropout logic [X]
     - make optimizer and l2 work with config.py [X]
@@ -70,6 +76,7 @@ def train(
     verbose=True,
     L2=False,
     l1_const=1e-4,
+    l2_value=None,          # per-call magnitude; overrides l2_const_set when set
     learning_rate=learning_rate_set,
     opt_func="adam",
     snapshots=True,
@@ -86,8 +93,10 @@ def train(
     if criterion is None:
         criterion = nn.MSELoss(reduction="mean")
 
-    if L2:
-        l2_const = l2_const_set
+    if l2_value is not None:
+        l2_const = l2_value         # sweep: exact magnitude from caller
+    elif L2:
+        l2_const = l2_const_set     # original path: global constant
     else:
         l2_const = 0.0
 
@@ -398,8 +407,130 @@ def run_experiments(num_samples=30000, hidden_units=None, run_id=None,
             )
 
 
+def _fmt_lam(lam: float) -> str:
+    """Format a lambda value for experiment names: 1e-4 → '1e-4', 0.0 → '0'."""
+    if lam == 0.0:
+        return "0"
+    exp = int(f"{lam:.0e}".split("e")[1])
+    mantissa = round(lam / 10 ** exp)
+    return f"{mantissa}e{exp}"
+
+
+def run_probe_sweep(
+    dropout_values=None,
+    l2_values=None,
+    function_names=None,
+    snapshot_root="snapshots_probe",
+    num_samples=30000,
+    probe_device=None,
+):
+    """One-factor dropout / L2 sweeps over a probe function subset.
+
+    Snapshots land in {snapshot_root}/small/{function}/{exp_name}/ (no run_id
+    layer) so analysis.py --snapshots-root {snapshot_root} --model-size small
+    resolves them directly. Writes sweep_experiments.json to {snapshot_root}/
+    for use with analysis.py --extra-experiments.
+    """
+    if dropout_values is None and l2_values is None:
+        raise ValueError("Provide at least one of dropout_values / l2_values.")
+    if function_names is None:
+        function_names = DEFAULT_PROBE_FUNCTIONS
+
+    _dev = probe_device if probe_device is not None else device
+
+    function_map = {f.__name__: f for f in functions}
+    missing = [n for n in function_names if n not in function_map]
+    if missing:
+        raise ValueError(f"Unknown function names: {missing}")
+    probe_functions = [function_map[n] for n in function_names]
+
+    # Bake model_size into root so analysis.py's expected layout is satisfied:
+    #   analysis.py reads {snapshots_root}/{model_size}/{function}/{exp_name}/
+    snap_root = str(Path(snapshot_root) / "small")
+    torch.manual_seed(set_seed)
+
+    dropout_exps = [
+        {"name": f"dropout_p{p}", "noise": 0.0, "optimizer": "adam",
+         "dropout": p, "weight_decay": False, "l2_value": 0.0}
+        for p in (dropout_values or [])
+    ]
+    l2_exps = [
+        {"name": f"wd_lam{_fmt_lam(lam)}", "noise": 0.0, "optimizer": "adam",
+         "dropout": 0.0, "weight_decay": lam > 0.0, "l2_value": lam}
+        for lam in (l2_values or [])
+    ]
+    all_exps = dropout_exps + l2_exps
+
+    sep = "═" * 56
+    print(sep)
+    print("Probe sweep")
+    print(f"Functions:      {function_names}")
+    print(f"Dropout values: {dropout_values or '(none)'}")
+    print(f"L2 values:      {l2_values or '(none)'}")
+    print(f"Total runs:     {len(all_exps) * len(probe_functions)}")
+    print(f"Snapshots root: {snap_root}/")
+    print(f"Device:         {_dev}")
+    print(sep)
+
+    for fn in probe_functions:
+        for e in all_exps:
+            function_name = fn.__name__
+            experiment_name = e["name"]
+            print(f"  [{function_name}/{experiment_name}] ...", end="", flush=True)
+
+            data_loaders, _ = make_data_loaders(
+                function=fn,
+                num_samples=num_samples,
+                noise=e["noise"],
+                seed=set_seed,
+            )
+
+            net = MLP(
+                **{**base_parameters, "hidden_units": [64, 64], "dropout": e["dropout"]}
+            ).to(_dev)
+
+            _, test_loss = train(
+                net=net,
+                data_loaders=data_loaders,
+                verbose=False,
+                L2=e["weight_decay"],
+                l2_value=e["l2_value"],
+                opt_func="adam",
+                snapshots=True,
+                snap_every=1,
+                snapshot_root=snap_root,
+                function_name=function_name,
+                experiment_name=experiment_name,
+                run_id=None,
+                num_samples=num_samples,
+                hidden_units=[64, 64],
+                experiment_settings={**base_parameters, **e},
+                learning_rate=learning_rate_set,
+                device=_dev,
+            )
+            print(f" done  (test_loss={test_loss:.4f})")
+
+    # Write sweep_experiments.json so analysis.py --extra-experiments can find these
+    sweep_json_path = Path(snapshot_root) / "sweep_experiments.json"
+    sweep_json_path.parent.mkdir(parents=True, exist_ok=True)
+    with sweep_json_path.open("w") as fj:
+        json.dump(
+            [{"name": e["name"], "noise": e["noise"], "optimizer": e["optimizer"],
+              "dropout": e["dropout"], "weight_decay": e["weight_decay"]}
+             for e in all_exps],
+            fj, indent=2,
+        )
+    print(f"\nWrote {sweep_json_path}")
+    print(
+        f"Run NID analysis with:\n"
+        f"  python analysis.py --snapshots-root {snapshot_root} --model-size small"
+        f" --extra-experiments {sweep_json_path} --results-root results_probe"
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run training experiments")
+    # ── original flags (unchanged) ────────────────────────────────────────
     parser.add_argument(
         "--num_samples",
         type=int,
@@ -412,7 +543,6 @@ if __name__ == "__main__":
         default=None,
         help="Hidden layer sizes as comma-separated ints or bracketed list, e.g. '64,64' or '[64,64]'",
     )
-
     parser.add_argument(
         "--weight-decay-only",
         action="store_true",
@@ -425,18 +555,93 @@ if __name__ == "__main__":
         help="Override the L2 regularization constant (default: uses l2_const_set=1e-4 from source). "
              "Recommended values: 1e-4 (weak), 1e-3 (moderate), 1e-2 (strong).",
     )
+    # ── sweep flags (new) ─────────────────────────────────────────────────
+    parser.add_argument(
+        "--dropout-sweep",
+        nargs="?", const="default", default=None,
+        metavar="P1,P2,...",
+        help="Dropout sweep. No value → defaults (0.0,0.1,0.2,0.3,0.5).",
+    )
+    parser.add_argument(
+        "--l2-sweep",
+        nargs="?", const="default", default=None,
+        metavar="L1,L2,...",
+        help="L2 sweep. No value → defaults (0,1e-5,1e-4,1e-3,1e-2).",
+    )
+    parser.add_argument(
+        "--functions",
+        type=str, default=None, metavar="F1,F2,...",
+        help="Comma-sep function names for sweep (default: f1,f7,f8).",
+    )
+    parser.add_argument(
+        "--snapshot-root",
+        type=str, default="snapshots_probe",
+        help="Snapshot root for probe sweep (default: snapshots_probe).",
+    )
+    parser.add_argument(
+        "--no-mps",
+        action="store_true",
+        help="Force CPU even if MPS is available (sweep mode only).",
+    )
 
     args = parser.parse_args()
 
-    try:
-        parsed_hidden = _parse_hidden_units(args.hidden_units)
-    except ValueError as exc:
-        print(f"Error parsing --hidden_units: {exc}", file=sys.stderr)
-        sys.exit(1)
+    is_sweep = args.dropout_sweep is not None or args.l2_sweep is not None
 
-    run_experiments(
-        num_samples=args.num_samples,
-        hidden_units=parsed_hidden,
-        weight_decay_only=args.weight_decay_only,
-        l2_const=args.l2_const,
-    )
+    if is_sweep:
+        _probe_device = torch.device("cpu") if args.no_mps else None
+
+        if args.dropout_sweep is not None:
+            if args.dropout_sweep == "default":
+                dropout_vals = DEFAULT_DROPOUT_SWEEP
+            else:
+                try:
+                    dropout_vals = [float(x) for x in args.dropout_sweep.split(",")]
+                except ValueError:
+                    print("Error: --dropout-sweep values must be comma-separated floats.",
+                          file=sys.stderr)
+                    sys.exit(1)
+        else:
+            dropout_vals = None
+
+        if args.l2_sweep is not None:
+            if args.l2_sweep == "default":
+                l2_vals = DEFAULT_L2_SWEEP
+            else:
+                try:
+                    l2_vals = [float(x) for x in args.l2_sweep.split(",")]
+                except ValueError:
+                    print("Error: --l2-sweep values must be comma-separated floats.",
+                          file=sys.stderr)
+                    sys.exit(1)
+        else:
+            l2_vals = None
+
+        fn_names = (
+            [x.strip() for x in args.functions.split(",")]
+            if args.functions else None
+        )
+
+        run_probe_sweep(
+            dropout_values=dropout_vals,
+            l2_values=l2_vals,
+            function_names=fn_names,
+            snapshot_root=args.snapshot_root,
+            num_samples=args.num_samples,
+            probe_device=_probe_device,
+        )
+
+    else:
+        # ── original behaviour, completely unchanged ──────────────────────
+        try:
+            parsed_hidden = _parse_hidden_units(args.hidden_units)
+        except ValueError as exc:
+            print(f"Error parsing --hidden_units: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        run_experiments(
+            num_samples=args.num_samples,
+            hidden_units=parsed_hidden,
+            weight_decay_only=args.weight_decay_only,
+            l2_const=args.l2_const,
+        )

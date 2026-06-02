@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from itertools import combinations
 from pathlib import Path
@@ -394,6 +395,11 @@ def run_analysis(args: argparse.Namespace) -> None:
         if not experiments:
             raise SystemExit(f"Experiment not found in config.EXPERIMENTS: {args.experiment}")
 
+    if args.extra_experiments:
+        extra = json.loads(Path(args.extra_experiments).read_text())
+        existing_names = {e["name"] for e in experiments}
+        experiments = experiments + [e for e in extra if e["name"] not in existing_names]
+
     if not args.dry_run:
         _ensure_dirs(results_root)
 
@@ -553,6 +559,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trajectories-only", action="store_true", help="Only generate trajectory outputs.")
     parser.add_argument("--dry-run", action="store_true", help="Print planned work without writing files.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing trajectory CSVs.")
+    parser.add_argument(
+        "--extra-experiments",
+        default=None,
+        metavar="FILE",
+        help="JSON file with additional experiment dicts not in config.EXPERIMENTS "
+             "(e.g. sweep_experiments.json written by train.py --dropout-sweep).",
+    )
     return parser.parse_args()
 
 
