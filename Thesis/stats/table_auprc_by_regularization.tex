@@ -1,0 +1,15 @@
+\begin{table}[ht]
+\centering
+\caption{Mean AUPRC ($2^{[10]}$) by regularisation condition, averaged across all functions, noise levels, and architectures.}
+\label{tab:auprc_by_regularization}
+\begin{tabular}{lrrr}
+\toprule
+Regularisation & Mean AUPRC & SD & Drop vs Base (\%) \\
+\midrule
+Base & 0.524 & 0.219 & -- \\
+Dropout & 0.404 & 0.171 & -22.9\% \\
+Weight decay & 0.486 & 0.196 & -7.1\% \\
+Dropout + weight decay & 0.400 & 0.171 & -23.7\% \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,1 @@
+retrain a couple of mlps with diffrent weitdecay const and diffrent dropout to see if there is a relation between the interaction recovery and this constants. (no need to retain every cross experiment, just a couple should do)
