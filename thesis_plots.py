@@ -569,7 +569,7 @@ def _plot_auprc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path,
     if plot_df.empty:
         return
 
-    # Aggregate to one point per (function_name, model_size) pair
+    # Aggregate to one point per (function_name, model_size) pair for the scatter
     agg_df = (
         plot_df.groupby(["function_name", "model_size"], as_index=False)[[AUPRC_COLUMN, "val_loss"]]
         .mean()
@@ -599,9 +599,9 @@ def _plot_auprc_vs_val_loss_scatter(results_df: pd.DataFrame, output_path: Path,
             edgecolors="none",
         )
 
-    # Filter to positive val_loss to avoid log-scale issues
-    x_all = agg_df["val_loss"].to_numpy(dtype=float)
-    y_all = agg_df[AUPRC_COLUMN].to_numpy(dtype=float)
+    # Correlation and trend line use raw per-run rows, not aggregated points
+    x_all = plot_df["val_loss"].to_numpy(dtype=float)
+    y_all = plot_df[AUPRC_COLUMN].to_numpy(dtype=float)
     valid_mask = x_all > 0
     x = x_all[valid_mask]
     y = y_all[valid_mask]
