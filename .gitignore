@@ -209,6 +209,6 @@ __marimo__/
 #snapshots folder 
 **/snapshots/
 **/snapshots_clean/
-
+**/snapshots_probe/
 dontcommit.txt
 dontcommit.txt
