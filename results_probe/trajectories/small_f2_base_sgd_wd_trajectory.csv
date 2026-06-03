@@ -1,0 +1,2 @@
+epoch,function_name,function,experiment,noise,optimizer,dropout,weight_decay,model_size,checkpoint_path,val_loss,auprc,auprc_full,auroc,auroc_full,success,error
+,f2,f2,base_sgd_wd,0.0,sgd,0.0,True,small,,,,,,,False,Missing experiment directory: snapshots_probe/small/f2/base_sgd_wd

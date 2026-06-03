@@ -1,0 +1,11 @@
+sweep,constant_value,mean_auprc,sd_auprc,n_functions,mean_pct_change
+dropout,0.0,0.40859,0.23521,3,0.0
+dropout,0.1,0.37572,0.31473,3,-14.68
+dropout,0.2,0.40079,0.22693,3,9.6
+dropout,0.3,0.35998,0.26613,3,-2.07
+dropout,0.5,0.2398,0.16815,3,-39.56
+weight_decay,0.0,0.52314,0.41419,3,0.0
+weight_decay,1e-05,0.57876,0.36628,3,19.75
+weight_decay,0.0001,0.51521,0.42447,3,-0.33
+weight_decay,0.001,0.50317,0.43027,3,-6.31
+weight_decay,0.01,0.33081,0.14935,3,1.47

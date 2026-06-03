@@ -1,0 +1,48 @@
+success,function_name,function,experiment,noise,optimizer,dropout,weight_decay,model_size,best_epoch,checkpoint_path,val_loss,auprc_full,auroc,auroc_full,num_gt,num_detected,num_candidates,error
+False,f7,f7,base_adam,0.0,adam,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/base_adam
+False,f7,f7,base_sgd,0.0,sgd,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/base_sgd
+False,f7,f7,0.1_adam,0.1,adam,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_adam
+False,f7,f7,0.1_sgd,0.1,sgd,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_sgd
+False,f7,f7,0.1_adam_dp,0.1,adam,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_adam_dp
+False,f7,f7,0.1_adam_wd,0.1,adam,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_adam_wd
+False,f7,f7,0.1_adam_dp_wd,0.1,adam,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_adam_dp_wd
+False,f7,f7,0.1_sgd_dp,0.1,sgd,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_sgd_dp
+False,f7,f7,0.1_sgd_dp_wd,0.1,sgd,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_sgd_dp_wd
+False,f7,f7,0.2_adam,0.2,adam,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_adam
+False,f7,f7,0.2_sgd,0.2,sgd,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_sgd
+False,f7,f7,0.2_adam_dp,0.2,adam,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_adam_dp
+False,f7,f7,0.2_adam_wd,0.2,adam,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_adam_wd
+False,f7,f7,0.2_adam_dp_wd,0.2,adam,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_adam_dp_wd
+False,f7,f7,0.2_sgd_dp,0.2,sgd,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_sgd_dp
+False,f7,f7,0.2_sgd_dp_wd,0.2,sgd,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_sgd_dp_wd
+False,f7,f7,0.5_adam,0.5,adam,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_adam
+False,f7,f7,0.5_sgd,0.5,sgd,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_sgd
+False,f7,f7,0.5_adam_dp,0.5,adam,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_adam_dp
+False,f7,f7,0.5_adam_wd,0.5,adam,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_adam_wd
+False,f7,f7,0.5_adam_dp_wd,0.5,adam,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_adam_dp_wd
+False,f7,f7,0.5_sgd_dp,0.5,sgd,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_sgd_dp
+False,f7,f7,0.5_sgd_dp_wd,0.5,sgd,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_sgd_dp_wd
+False,f7,f7,1.0_adam,1.0,adam,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_adam
+False,f7,f7,1.0_sgd,1.0,sgd,0.0,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_sgd
+False,f7,f7,1.0_adam_dp,1.0,adam,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_adam_dp
+False,f7,f7,1.0_adam_wd,1.0,adam,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_adam_wd
+False,f7,f7,1.0_adam_dp_wd,1.0,adam,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_adam_dp_wd
+False,f7,f7,1.0_sgd_dp,1.0,sgd,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_sgd_dp
+False,f7,f7,1.0_sgd_dp_wd,1.0,sgd,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_sgd_dp_wd
+False,f7,f7,base_sgd_dp,0.0,sgd,0.2,False,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/base_sgd_dp
+False,f7,f7,base_sgd_wd,0.0,sgd,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/base_sgd_wd
+False,f7,f7,base_sgd_dp_wd,0.0,sgd,0.2,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/base_sgd_dp_wd
+False,f7,f7,0.1_sgd_wd,0.1,sgd,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.1_sgd_wd
+False,f7,f7,0.2_sgd_wd,0.2,sgd,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.2_sgd_wd
+False,f7,f7,0.5_sgd_wd,0.5,sgd,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/0.5_sgd_wd
+False,f7,f7,1.0_sgd_wd,1.0,sgd,0.0,True,small,,,,,,,,,1013,Missing experiment directory: snapshots_probe/small/f7/1.0_sgd_wd
+True,f7,f7,dropout_p0.0,0.0,adam,0.0,False,small,41.0,snapshots_probe/small/f7/dropout_p0.0/best_epoch_0041.pt,0.003909178078174591,0.2529615004935834,0.25,0.6231417244796829,4.0,6.0,1013,
+True,f7,f7,dropout_p0.1,0.0,adam,0.1,False,small,69.0,snapshots_probe/small/f7/dropout_p0.1/best_epoch_0069.pt,0.021705884486436844,0.2529615004935834,0.25,0.6246283448959365,4.0,2.0,1013,
+True,f7,f7,dropout_p0.2,0.0,adam,0.2,False,small,37.0,snapshots_probe/small/f7/dropout_p0.2/best_epoch_0037.pt,0.029853863641619682,0.501974333662389,0.5,0.7497522299306243,4.0,3.0,1013,
+True,f7,f7,dropout_p0.3,0.0,adam,0.3,False,small,79.0,snapshots_probe/small/f7/dropout_p0.3/best_epoch_0079.pt,0.036581505089998245,0.501974333662389,0.5,0.7497522299306243,4.0,3.0,1013,
+True,f7,f7,dropout_p0.5,0.0,adam,0.5,False,small,72.0,snapshots_probe/small/f7/dropout_p0.5/best_epoch_0072.pt,0.059332482516765594,0.2529615004935834,0.25,0.6246283448959365,4.0,2.0,1013,
+True,f7,f7,wd_lam0,0.0,adam,0.0,False,small,98.0,snapshots_probe/small/f7/wd_lam0/best_epoch_0098.pt,0.0036391387693583965,0.2529615004935834,0.25,0.6216551040634292,4.0,10.0,1013,
+True,f7,f7,wd_lam1e-5,0.0,adam,0.0,True,small,95.0,snapshots_probe/small/f7/wd_lam1e-5/best_epoch_0095.pt,0.0035399554762989283,0.3353076669957223,0.375,0.7472745292368681,4.0,9.0,1013,
+True,f7,f7,wd_lam1e-4,0.0,adam,0.0,True,small,33.0,snapshots_probe/small/f7/wd_lam1e-4/best_epoch_0033.pt,0.00464501790702343,0.3353076669957223,0.35,0.7475222993062438,4.0,8.0,1013,
+True,f7,f7,wd_lam1e-3,0.0,adam,0.0,True,small,80.0,snapshots_probe/small/f7/wd_lam1e-3/best_epoch_0080.pt,0.0068670050241053104,0.2529615004935834,0.25,0.6227700693756194,4.0,7.0,1013,
+True,f7,f7,wd_lam1e-2,0.0,adam,0.0,True,small,68.0,snapshots_probe/small/f7/wd_lam1e-2/best_epoch_0068.pt,0.021480852738022804,0.501974333662389,0.5,0.7485133795837462,4.0,8.0,1013,

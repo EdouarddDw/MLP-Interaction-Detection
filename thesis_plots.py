@@ -22,6 +22,7 @@ from typing import Iterable
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 from scipy.stats import spearmanr
 
 from synth import functions as synth_functions
@@ -42,6 +43,9 @@ MODEL_SIZE_ORDER = ["small", "big"]
 COMPARISON_FUNCTIONS = [f"f{i}" for i in range(1, 11)]
 
 _CONVERGENCE_STATS: pd.DataFrame = pd.DataFrame()
+
+# Functions used in the regularisation-strength probe sweep.
+PROBE_FUNCTIONS = ["f1", "f7", "f8"]
 
 
 def _filter_convergent_runs(df: pd.DataFrame, trajectories_dir: Path, min_reduction: float = 0.03) -> pd.DataFrame:
@@ -1901,16 +1905,597 @@ def generate_thesis_plots(results_df: pd.DataFrame, output_dir: Path, trajectori
         plt.close(fig)
 
 
+# ─── Probe / dose-response analysis ────────────────────────────────────────
+
+
+def _parse_wd_lambda(exp_name: str) -> float | None:
+    """Parse L2 lambda from wd_lam* experiment names (wd_lam0 → 0.0, wd_lam1e-5 → 1e-5).
+
+    The numeric weight_decay column in probe CSVs is boolean and cannot distinguish
+    different lambda values, so the experiment name is the authoritative source here.
+    """
+    if not exp_name.startswith("wd_lam"):
+        return None
+    try:
+        return float(exp_name[len("wd_lam"):])
+    except ValueError:
+        return None
+
+
+def _load_probe_results(probe_root: Path) -> pd.DataFrame:
+    """Load successful probe rows for PROBE_FUNCTIONS from probe_root/small/."""
+    frames: list[pd.DataFrame] = []
+    for fn in PROBE_FUNCTIONS:
+        path = probe_root / "small" / f"{fn}_analysis.csv"
+        if not path.exists():
+            print(f"  [probe] WARNING: {path} not found — skipping {fn}")
+            continue
+        df = pd.read_csv(path)
+        df = df[df["success"].fillna(False)].copy()
+        if df.empty:
+            print(f"  [probe] WARNING: no successful rows in {path}")
+            continue
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    out[AUPRC_COLUMN] = pd.to_numeric(out[AUPRC_COLUMN], errors="coerce")
+    out["dropout"] = pd.to_numeric(out["dropout"], errors="coerce")
+    return out
+
+
+def _probe_two_stage_summary(probe_df: pd.DataFrame, sweep: str) -> pd.DataFrame:
+    """Two-stage aggregation over probe data.
+
+    sweep=="dropout": selects dropout_p* experiments; x_value from numeric dropout column.
+    sweep=="wd": selects wd_lam* experiments (including lam0); x_value parsed from name.
+
+    Stage 1: mean AUPRC within each (function_name, x_value) — always one row in the probe.
+    Stage 2: mean ± SD of those function means across PROBE_FUNCTIONS.
+
+    Returns DataFrame: x_value | mean | std | count, sorted by x_value.
+    """
+    if sweep == "dropout":
+        mask = probe_df["experiment"].str.startswith("dropout_p")
+        sub = probe_df[mask].copy()
+        sub["x_value"] = sub["dropout"].astype(float)
+    else:
+        mask = probe_df["experiment"].str.startswith("wd_lam")
+        sub = probe_df[mask].copy()
+        sub["x_value"] = sub["experiment"].map(_parse_wd_lambda)
+
+    sub = sub.dropna(subset=["x_value", AUPRC_COLUMN])
+
+    fn_level = (
+        sub.groupby(["function_name", "x_value"], as_index=False)[AUPRC_COLUMN]
+        .mean()
+        .rename(columns={AUPRC_COLUMN: "fn_mean"})
+    )
+    summary = (
+        fn_level.groupby("x_value", as_index=False)["fn_mean"]
+        .agg(mean="mean", std="std", count="count")
+    )
+    summary["std"] = summary["std"].fillna(0.0)
+    return summary.sort_values("x_value").reset_index(drop=True)
+
+
+# Functions whose anchor AUPRC falls below this threshold are excluded from the
+# per-function % normalisation to avoid a tiny denominator inflating the mean/SD.
+# All probe anchors in the current data are well above this (f1: 0.29, f7: 0.25,
+# f8: 0.68+), so in practice no function is excluded — the guard is a safety net.
+_PROBE_ANCHOR_THRESHOLD = 0.15
+
+
+def _compute_pct_change(
+    probe_df: pd.DataFrame, sweep: str, threshold: float = _PROBE_ANCHOR_THRESHOLD
+) -> tuple[pd.DataFrame, list[str]]:
+    """Per-function % change in AUPRC relative to that function's own zero-strength anchor.
+
+    Normalising per function before aggregating removes the between-function level
+    offset (e.g. f8 being high doesn't inflate the mean or the SD).
+
+    sweep=="dropout": anchor = dropout_p0.0 AUPRC; x_value from numeric dropout column.
+    sweep=="wd":      anchor = wd_lam0 AUPRC;      x_value parsed from experiment name.
+
+    Returns:
+      pct_df  — function_name | x_value | pct_change | anchor_auprc | auprc_full
+      excluded — functions dropped because anchor_auprc < threshold (printed to stdout)
+    """
+    if sweep == "dropout":
+        mask = probe_df["experiment"].str.startswith("dropout_p")
+        anchor_exp = "dropout_p0.0"
+    else:
+        mask = probe_df["experiment"].str.startswith("wd_lam")
+        anchor_exp = "wd_lam0"
+
+    sub = probe_df[mask].copy()
+    if sweep == "dropout":
+        sub["x_value"] = sub["dropout"].astype(float)
+    else:
+        sub["x_value"] = sub["experiment"].map(_parse_wd_lambda)
+
+    sub = sub.dropna(subset=["x_value", AUPRC_COLUMN])
+
+    anchor_map: dict[str, float] = (
+        probe_df[probe_df["experiment"] == anchor_exp]
+        .set_index("function_name")[AUPRC_COLUMN]
+        .to_dict()
+    )
+
+    excluded: list[str] = []
+    rows = []
+    for fn in PROBE_FUNCTIONS:
+        anchor_val = anchor_map.get(fn, np.nan)
+        if pd.isna(anchor_val) or float(anchor_val) < threshold:
+            excluded.append(fn)
+            print(
+                f"  [probe/pct] {sweep} panel: excluding {fn} "
+                f"(anchor AUPRC={anchor_val:.4f} < threshold {threshold})"
+            )
+            continue
+        for _, r in sub[sub["function_name"] == fn].iterrows():
+            rows.append({
+                "function_name": fn,
+                "x_value": float(r["x_value"]),
+                "pct_change": (float(r[AUPRC_COLUMN]) - float(anchor_val)) / float(anchor_val) * 100.0,
+                "anchor_auprc": float(anchor_val),
+                AUPRC_COLUMN: float(r[AUPRC_COLUMN]),
+            })
+
+    if not excluded:
+        print(f"  [probe/pct] {sweep} panel: all {len(PROBE_FUNCTIONS)} functions pass anchor threshold.")
+
+    return pd.DataFrame(rows), excluded
+
+
+def _probe_pct_summary(pct_df: pd.DataFrame) -> pd.DataFrame:
+    """Two-stage aggregation of per-function % changes.
+
+    Stage 1: mean within (function_name, x_value) — always one probe row per cell.
+    Stage 2: mean ± SD across functions.
+
+    Returns: x_value | mean_pct | sd_pct | n_valid, sorted by x_value.
+    """
+    if pct_df.empty:
+        return pd.DataFrame(columns=["x_value", "mean_pct", "sd_pct", "n_valid"])
+    fn_level = (
+        pct_df.groupby(["function_name", "x_value"], as_index=False)["pct_change"]
+        .mean()
+        .rename(columns={"pct_change": "fn_mean_pct"})
+    )
+    summary = (
+        fn_level.groupby("x_value", as_index=False)["fn_mean_pct"]
+        .agg(mean_pct="mean", sd_pct="std", n_valid="count")
+    )
+    summary["sd_pct"] = summary["sd_pct"].fillna(0.0)
+    return summary.sort_values("x_value").reset_index(drop=True)
+
+
+def _shape_verdict(pct_array: np.ndarray) -> str:
+    """Short data-driven verdict for the shape of a % change series (non-anchor points)."""
+    if len(pct_array) == 0:
+        return "unknown"
+    max_abs = float(np.max(np.abs(pct_array)))
+    last = float(pct_array[-1])
+    if max_abs < 10:
+        return "no clear effect"
+    mid = pct_array[:-1]
+    if last < -20 and len(mid) > 0 and float(np.max(np.abs(mid))) < 15:
+        return "flat then collapse"
+    if last < -20:
+        return "declining with strength"
+    if last > 20:
+        return "improving with strength"
+    return "mixed response"
+
+
+def _plot_dose_response_pct(probe_df: pd.DataFrame, output_dir: Path) -> None:
+    """Plot 2 — Two-panel % change figure (7.0 × 3.5, double-column).
+
+    Left:  mean % change in AUPRC vs dropout rate p  (linear x-axis).
+           Trend guide: thin grey dashed linear fit (the dropout effect is ~linear).
+    Right: mean % change in AUPRC vs L2 lambda       (log x-axis; lambda=0 = 0% reference).
+           No trend line drawn: with n=3 single-seed probe functions the cross-function
+           % change shows high variance at all tested lambda values and no consistent
+           flat-then-collapse shape across functions (f7 actually improves at lambda=1e-2),
+           so a guide line would misrepresent the shape certainty.
+
+    Both panels: points = mean pct change; error bars = ±1 SD across valid functions;
+    horizontal reference at 0%; no per-function spaghetti.
+    Saved as regularization_dose_response_pct.{pgf,png}.
+    """
+    if probe_df.empty:
+        return
+
+    color_main = "#2A6F97"
+
+    dp_pct, _ = _compute_pct_change(probe_df, "dropout")
+    wd_pct, _ = _compute_pct_change(probe_df, "wd")
+
+    dp_sum = _probe_pct_summary(dp_pct)
+    wd_sum = _probe_pct_summary(wd_pct)
+
+    # Exclude lambda=0 from WD plotted points (it IS the 0% reference line)
+    wd_plot = wd_sum[wd_sum["x_value"] > 0.0].copy()
+
+    fig, (ax_dp, ax_wd) = plt.subplots(1, 2, figsize=(7.0, 3.5))
+
+    # ── Left panel: dropout ──────────────────────────────────────────────────
+    dp_x = dp_sum["x_value"].to_numpy(dtype=float)
+    dp_m = dp_sum["mean_pct"].to_numpy(dtype=float)
+    dp_s = dp_sum["sd_pct"].to_numpy(dtype=float)
+
+    ax_dp.axhline(0.0, color="0.5", linestyle="-", linewidth=0.7, zorder=1)
+
+    if len(dp_x) >= 2:
+        coeffs = np.polyfit(dp_x, dp_m, 1)
+        x_fine = np.linspace(dp_x.min(), dp_x.max(), 100)
+        ax_dp.plot(x_fine, np.polyval(coeffs, x_fine),
+                   color="0.6", linestyle="--", linewidth=0.8, zorder=2)
+
+    ax_dp.errorbar(dp_x, dp_m, yerr=dp_s, fmt="o", color=color_main,
+                   capsize=4, markersize=5, linewidth=1.2, zorder=4)
+
+    ax_dp.set_xlabel("Dropout rate $p$")
+    ax_dp.set_ylabel("AUPRC change vs anchor (%,  ±1 SD)")
+    ax_dp.set_title("Dropout dose-response")
+    ax_dp.title.set_fontsize(10)
+    ax_dp.set_xlim(-0.02, 0.55)
+    ax_dp.set_xticks([0.0, 0.1, 0.2, 0.3, 0.5])
+
+    # ── Right panel: L2 weight decay ─────────────────────────────────────────
+    wd_x = wd_plot["x_value"].to_numpy(dtype=float)
+    wd_m = wd_plot["mean_pct"].to_numpy(dtype=float)
+    wd_s = wd_plot["sd_pct"].to_numpy(dtype=float)
+
+    ax_wd.axhline(0.0, color="0.5", linestyle="-", linewidth=0.7, zorder=1)
+
+    ax_wd.errorbar(wd_x, wd_m, yerr=wd_s, fmt="o", color=color_main,
+                   capsize=4, markersize=5, linewidth=1.2, zorder=4)
+
+    ax_wd.set_xscale("log")
+    ax_wd.set_xlabel(r"Weight-decay $\lambda$")
+    ax_wd.set_ylabel("AUPRC change vs anchor (%,  ±1 SD)")
+    ax_wd.set_title("L2 weight-decay dose-response")
+    ax_wd.title.set_fontsize(10)
+
+    fig.tight_layout()
+    _save_pgf(fig, output_dir / "regularization_dose_response_pct.pgf")
+    plt.close(fig)
+
+
+def _plot_dose_response_overlay(probe_df: pd.DataFrame, output_dir: Path) -> None:
+    """Plot 3 — Single-axis overlay: dropout vs L2 weight decay (3.5 × 2.6, single-column).
+
+    X-axis: rank index 0..4, where rank 0 = zero-strength anchor (p=0 / λ=0) for both
+    sweeps.  Both series include the anchor as a plotted point so both start at 0%.
+    The two sweeps are aligned by ordered rank, not by identical physical units; the
+    axis label makes this explicit.
+
+    SD shown as shaded bands (not cap bars) to keep two overlaid series readable.
+    No trend guides — the shape contrast between the two series is the deliverable.
+    Saved as regularization_dose_response_overlay.{pgf,png}.
+
+    Rank → value mapping:
+      Dropout: rank 0=p=0.0, 1=p=0.1, 2=p=0.2, 3=p=0.3, 4=p=0.5
+      WD:      rank 0=λ=0,   1=λ=1e-5, 2=λ=1e-4, 3=λ=1e-3, 4=λ=1e-2
+    """
+    if probe_df.empty:
+        return
+
+    color_dp = "#2A6F97"   # small-blue
+    color_wd = "#E76F51"   # big-orange
+
+    dp_pct, _ = _compute_pct_change(probe_df, "dropout")
+    wd_pct, _ = _compute_pct_change(probe_df, "wd")
+
+    dp_sum = _probe_pct_summary(dp_pct).sort_values("x_value").reset_index(drop=True)
+    wd_sum = _probe_pct_summary(wd_pct).sort_values("x_value").reset_index(drop=True)
+
+    # Assign integer rank (0 = anchor) — sorted ascending by strength value
+    dp_sum["rank"] = np.arange(len(dp_sum), dtype=float)
+    wd_sum["rank"] = np.arange(len(wd_sum), dtype=float)
+
+    dp_r = dp_sum["rank"].to_numpy(dtype=float)
+    dp_m = dp_sum["mean_pct"].to_numpy(dtype=float)
+    dp_s = dp_sum["sd_pct"].to_numpy(dtype=float)
+
+    wd_r = wd_sum["rank"].to_numpy(dtype=float)
+    wd_m = wd_sum["mean_pct"].to_numpy(dtype=float)
+    wd_s = wd_sum["sd_pct"].to_numpy(dtype=float)
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+
+    ax.axhline(0.0, color="0.5", linestyle="-", linewidth=0.7, zorder=1)
+
+    ax.fill_between(dp_r, dp_m - dp_s, dp_m + dp_s,
+                    color=color_dp, alpha=0.15, linewidth=0, zorder=2)
+    ax.plot(dp_r, dp_m, "o-", color=color_dp, linewidth=1.4, markersize=4,
+            zorder=4, label="Dropout")
+
+    ax.fill_between(wd_r, wd_m - wd_s, wd_m + wd_s,
+                    color=color_wd, alpha=0.15, linewidth=0, zorder=2)
+    ax.plot(wd_r, wd_m, "s-", color=color_wd, linewidth=1.4, markersize=4,
+            zorder=4, label="L2 weight decay")
+
+    n_ranks = max(len(dp_r), len(wd_r))
+    ax.set_xticks(np.arange(n_ranks))
+    ax.set_xlabel(
+        "Regularisation rank  (0 = off, 4 = strongest tested)\n"
+        r"Dropout: $p{=}0,\,0.1,\,0.2,\,0.3,\,0.5$"
+        r"  ·  WD: $\lambda{=}0,\,10^{-5},\,10^{-4},\,10^{-3},\,10^{-2}$",
+        fontsize=7,
+    )
+    ax.set_ylabel("AUPRC change vs anchor (%)")
+    ax.set_title("Dropout vs L2 weight decay")
+    ax.title.set_fontsize(10)
+    ax.legend(frameon=False, fontsize=7, loc="lower left")
+
+    fig.tight_layout()
+    _save_pgf(fig, output_dir / "regularization_dose_response_overlay.pgf")
+    plt.close(fig)
+
+
+def _save_dose_response_table(
+    probe_df: pd.DataFrame, csv_path: Path, tex_path: Path
+) -> None:
+    """Print dose-response table to stdout, save CSV, and write a booktabs LaTeX table.
+
+    Table columns: constant value | mean AUPRC (abs) | SD AUPRC | mean % change vs anchor.
+    One section per regulariser. Caption notes: single-seed, 3 probe functions (f1/f7/f8),
+    small arch, η=0, plus a data-driven shape verdict per regulariser.
+    """
+    dp_abs = _probe_two_stage_summary(probe_df, "dropout")
+    wd_abs = _probe_two_stage_summary(probe_df, "wd")
+
+    dp_pct, _ = _compute_pct_change(probe_df, "dropout")
+    wd_pct, _ = _compute_pct_change(probe_df, "wd")
+    dp_pct_sum = _probe_pct_summary(dp_pct)
+    wd_pct_sum = _probe_pct_summary(wd_pct)
+
+    def _merge_rows(abs_df: pd.DataFrame, pct_df: pd.DataFrame, sweep_label: str) -> list[dict]:
+        out = []
+        for _, row in abs_df.iterrows():
+            xv = row["x_value"]
+            match = pct_df[pct_df["x_value"] == xv]
+            mean_pct = float(match["mean_pct"].iloc[0]) if not match.empty else np.nan
+            out.append({
+                "sweep": sweep_label,
+                "constant_value": xv,
+                "mean_auprc": round(float(row["mean"]), 5),
+                "sd_auprc": round(float(row["std"]), 5),
+                "n_functions": int(row["count"]),
+                "mean_pct_change": round(mean_pct, 2) if not np.isnan(mean_pct) else np.nan,
+            })
+        return out
+
+    rows = _merge_rows(dp_abs, dp_pct_sum, "dropout") + _merge_rows(wd_abs, wd_pct_sum, "weight_decay")
+    table_df = pd.DataFrame(rows)
+
+    print("\n" + "=" * 72)
+    print("DOSE-RESPONSE TABLE  (f1, f7, f8 | small arch | η=0 | Adam)")
+    print("=" * 72)
+    print(table_df.to_string(index=False))
+    print("=" * 72)
+
+    _ensure_parent(csv_path)
+    table_df.to_csv(csv_path, index=False)
+    print(f"\nSaved CSV  → {csv_path}")
+
+    # ── LaTeX table ──────────────────────────────────────────────────────────
+    dp_non_anchor = dp_pct_sum.loc[dp_pct_sum["x_value"] > 0, "mean_pct"].to_numpy(dtype=float)
+    wd_non_anchor = wd_pct_sum.loc[wd_pct_sum["x_value"] > 0, "mean_pct"].to_numpy(dtype=float)
+    dp_verdict = _shape_verdict(dp_non_anchor)
+    wd_verdict = _shape_verdict(wd_non_anchor)
+
+    lines = [
+        r"\begin{table}[htbp]",
+        r"\centering",
+        (
+            r"\caption{Best-epoch AUPRC dose-response for single-seed probe sweep "
+            r"(functions f1, f7, f8; small architecture; $\eta=0$; Adam). "
+            r"Mean \% change is per-function normalised before averaging across functions. "
+            f"Dropout shape: \\textit{{{dp_verdict}}}. "
+            f"L2 weight-decay shape: \\textit{{{wd_verdict}}}.}}"
+        ),
+        r"\label{tab:dose_response}",
+        r"\begin{tabular}{lrrr}",
+        r"\toprule",
+        r"Constant & Mean AUPRC & SD & Mean \% change \\",
+        r"\midrule",
+        r"\multicolumn{4}{l}{\textit{Dropout (anchor: $p=0$)}} \\",
+    ]
+
+    for _, r in table_df[table_df["sweep"] == "dropout"].iterrows():
+        val = f"$p = {r['constant_value']:g}$"
+        pct_str = f"{r['mean_pct_change']:+.1f}" if not pd.isna(r["mean_pct_change"]) else "--"
+        lines.append(f"\\quad {val} & {r['mean_auprc']:.3f} & {r['sd_auprc']:.3f} & {pct_str} \\\\")
+
+    lines += [
+        r"\midrule",
+        r"\multicolumn{4}{l}{\textit{L2 weight decay (anchor: $\lambda=0$)}} \\",
+    ]
+
+    for _, r in table_df[table_df["sweep"] == "weight_decay"].iterrows():
+        xv = r["constant_value"]
+        if xv == 0.0:
+            val = r"$\lambda = 0$ (anchor)"
+        else:
+            exp = int(round(np.log10(xv)))
+            val = f"$\\lambda = 10^{{{exp}}}$"
+        pct_str = f"{r['mean_pct_change']:+.1f}" if not pd.isna(r["mean_pct_change"]) else "--"
+        lines.append(f"\\quad {val} & {r['mean_auprc']:.3f} & {r['sd_auprc']:.3f} & {pct_str} \\\\")
+
+    lines += [
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+        "",
+    ]
+
+    _ensure_parent(tex_path)
+    tex_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Saved LaTeX → {tex_path}")
+
+
+def _print_reproduction_check(probe_df: pd.DataFrame, main_results_root: Path) -> None:
+    """Compare probe anchors and swept conditions against the matched main-results slice.
+
+    Matched slice: f1, f7, f8 | small | noise=0 | Adam.
+    Reports dropout_p0.0 vs main base_adam and wd_lam0 vs main base_adam as anchor checks.
+    Reports dropout_p0.2 and wd_lam1e-4 vs main slice if that slice exists; states
+    explicitly when it does not (so as not to compare against a wrong baseline).
+    """
+    print("\n" + "=" * 72)
+    print("REPRODUCTION CHECK  (main results for f1/f7/f8 | small | noise=0 | Adam)")
+    print("=" * 72)
+
+    main_frames = []
+    for fn in PROBE_FUNCTIONS:
+        path = main_results_root / "small" / f"{fn}_analysis.csv"
+        if path.exists():
+            df = pd.read_csv(path)
+            df = df[df["success"].fillna(False)].copy()
+            main_frames.append(df)
+
+    if not main_frames:
+        print("  Main results not found — skipping.")
+        print("=" * 72 + "\n")
+        return
+
+    main_df = pd.concat(main_frames, ignore_index=True)
+    main_df["noise"] = pd.to_numeric(main_df["noise"], errors="coerce")
+    main_df["dropout"] = pd.to_numeric(main_df["dropout"], errors="coerce")
+    main_df["weight_decay"] = main_df["weight_decay"].astype(str).str.lower().isin(["true", "1", "yes"])
+    main_df[AUPRC_COLUMN] = pd.to_numeric(main_df[AUPRC_COLUMN], errors="coerce")
+
+    main_slice = main_df[(main_df["noise"] == 0.0) & (main_df["optimizer"] == "adam")].copy()
+    main_base = main_slice[(main_slice["dropout"] == 0.0) & (~main_slice["weight_decay"])].copy()
+
+    main_anchor_mean = np.nan
+    if not main_base.empty:
+        main_fn_means = main_base.groupby("function_name")[AUPRC_COLUMN].mean()
+        main_anchor_mean = float(main_fn_means.mean())
+        main_anchor_std = float(main_fn_means.std()) if len(main_fn_means) > 1 else 0.0
+        print(f"\nMain base_adam (dropout=0, no WD, noise=0)  n_fn={len(main_fn_means)}")
+        for fn, v in main_fn_means.items():
+            print(f"  {fn}: {v:.4f}")
+        print(f"  Mean {main_anchor_mean:.4f}  SD {main_anchor_std:.4f}")
+    else:
+        print("\nMain base_adam at noise=0: not found")
+
+    def _report_probe_condition(label: str, exp_name: str, anchor: float) -> None:
+        rows = probe_df[probe_df["experiment"] == exp_name]
+        if rows.empty:
+            print(f"\n{label}: experiment not found in probe data")
+            return
+        fn_vals = rows.set_index("function_name")[AUPRC_COLUMN]
+        print(f"\n{label}")
+        for fn in PROBE_FUNCTIONS:
+            v = fn_vals.get(fn, np.nan)
+            print(f"  {fn}: {v:.4f}" if not pd.isna(v) else f"  {fn}: N/A")
+        probe_mean = float(fn_vals.reindex(PROBE_FUNCTIONS).mean())
+        probe_std = float(fn_vals.reindex(PROBE_FUNCTIONS).std())
+        print(f"  Mean {probe_mean:.4f}  SD {probe_std:.4f}")
+        if not np.isnan(anchor):
+            diff = abs(probe_mean - anchor)
+            pct = diff / anchor * 100
+            flag = "  *** >10% divergence (single-seed variance)" if pct > 10 else "  ok (<10%)"
+            print(f"  vs main anchor: |Δ|={diff:.4f}  ({pct:.1f}%){flag}")
+
+    dp_summary = _probe_two_stage_summary(probe_df, "dropout")
+    wd_summary = _probe_two_stage_summary(probe_df, "wd")
+    dp_anchor_mean = float(dp_summary.loc[dp_summary["x_value"] == 0.0, "mean"].iloc[0]) \
+        if not dp_summary[dp_summary["x_value"] == 0.0].empty else np.nan
+    wd_anchor_mean = float(wd_summary.loc[wd_summary["x_value"] == 0.0, "mean"].iloc[0]) \
+        if not wd_summary[wd_summary["x_value"] == 0.0].empty else np.nan
+
+    _report_probe_condition("Probe dropout_p0.0  (p=0, noise=0, Adam)", "dropout_p0.0", main_anchor_mean)
+    _report_probe_condition("Probe wd_lam0  (λ=0, noise=0, Adam)", "wd_lam0", main_anchor_mean)
+
+    # dropout_p0.2 vs main
+    print("\nProbe dropout_p0.2  (p=0.2, noise=0, Adam)")
+    dp02_rows = probe_df[probe_df["experiment"] == "dropout_p0.2"].set_index("function_name")[AUPRC_COLUMN]
+    dp02_vals = [dp02_rows.get(fn, np.nan) for fn in PROBE_FUNCTIONS]
+    for fn, v in zip(PROBE_FUNCTIONS, dp02_vals):
+        print(f"  {fn}: {v:.4f}" if not pd.isna(v) else f"  {fn}: N/A")
+    dp02_mean = float(np.nanmean(dp02_vals))
+    print(f"  Mean {dp02_mean:.4f}")
+    main_dp02 = main_slice[(main_slice["dropout"] == 0.2) & (~main_slice["weight_decay"])]
+    if main_dp02.empty:
+        print("  Main results for noise=0+adam+dropout=0.2: NOT FOUND "
+              "(main experiment did not run this condition — probe is filling the gap).")
+    else:
+        m = float(main_dp02.groupby("function_name")[AUPRC_COLUMN].mean().mean())
+        pct = abs(dp02_mean - m) / m * 100 if m > 0 else np.nan
+        flag = "  *** >10% divergence" if pct > 10 else "  ok"
+        print(f"  Main slice mean: {m:.4f} | |Δ|={abs(dp02_mean - m):.4f}  ({pct:.1f}%){flag}")
+
+    # wd_lam1e-4 vs main
+    print("\nProbe wd_lam1e-4  (λ=1e-4, noise=0, Adam)")
+    wd4_rows = probe_df[probe_df["experiment"] == "wd_lam1e-4"].set_index("function_name")[AUPRC_COLUMN]
+    wd4_vals = [wd4_rows.get(fn, np.nan) for fn in PROBE_FUNCTIONS]
+    for fn, v in zip(PROBE_FUNCTIONS, wd4_vals):
+        print(f"  {fn}: {v:.4f}" if not pd.isna(v) else f"  {fn}: N/A")
+    wd4_mean = float(np.nanmean(wd4_vals))
+    print(f"  Mean {wd4_mean:.4f}")
+    main_wd = main_slice[(main_slice["dropout"] == 0.0) & main_slice["weight_decay"]]
+    if main_wd.empty:
+        print("  Main results for noise=0+adam+weight_decay=True: NOT FOUND "
+              "(main experiment did not run this condition — probe is filling the gap).")
+    else:
+        m = float(main_wd.groupby("function_name")[AUPRC_COLUMN].mean().mean())
+        pct = abs(wd4_mean - m) / m * 100 if m > 0 else np.nan
+        flag = "  *** >10% divergence" if pct > 10 else "  ok"
+        print(f"  Main slice mean (boolean WD, any lambda): {m:.4f} | |Δ|={abs(wd4_mean - m):.4f}  ({pct:.1f}%){flag}")
+
+    print("=" * 72 + "\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate thesis plots from best-epoch results")
     parser.add_argument("--results-root", default="results", help="Root folder containing big/small analysis CSVs")
     parser.add_argument("--output-dir", default="results/thesis_plots", help="Directory for generated thesis plots")
     parser.add_argument("--trajectories-dir", default="results/trajectories", help="Directory containing trajectory CSVs")
+    parser.add_argument(
+        "--prob",
+        action="store_true",
+        help="Generate regularisation dose-response figures from probe results; skip full thesis suite.",
+    )
+    parser.add_argument(
+        "--probe-results-root",
+        default="results_probe",
+        help="Root folder for probe analysis CSVs (default: results_probe)",
+    )
     args = parser.parse_args()
 
     results_root = Path(args.results_root)
     output_dir = Path(args.output_dir)
     trajectories_dir = Path(args.trajectories_dir)
+
+    if args.prob:
+        probe_root = Path(args.probe_results_root)
+        _setup_thesis_style()
+        probe_df = _load_probe_results(probe_root)
+        if probe_df.empty:
+            raise SystemExit(
+                f"No probe results found under {probe_root}/small/ — "
+                "check that dropout_p* and wd_lam* experiments succeeded."
+            )
+        print(f"Loaded {len(probe_df)} successful probe rows "
+              f"from {probe_df['function_name'].nunique()} functions.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _plot_dose_response_pct(probe_df, output_dir)
+        _plot_dose_response_overlay(probe_df, output_dir)
+        _save_dose_response_table(
+            probe_df,
+            probe_root / "dose_response.csv",
+            probe_root / "dose_response.tex",
+        )
+        _print_reproduction_check(probe_df, results_root)
+        print(f"Saved: {output_dir}/regularization_dose_response_pct.{{pgf,png}}")
+        print(f"       {output_dir}/regularization_dose_response_overlay.{{pgf,png}}")
+        return
 
     results_df = load_best_epoch_results(results_root, trajectories_dir)
     if results_df.empty:
