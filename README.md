@@ -13,23 +13,33 @@ Neural Interaction Detection (NID) is a post-hoc method that infers feature inte
 ```
 MLP-Interaction-Detection/
 │
-├── train.py                   # Training loop, snapshot saving, provenance logging
+├── train.py                   # Training loop, snapshot saving, probe sweep mode
 ├── analysis.py                # Load checkpoints, run NID, compute AUROC/AUPRC metrics
-├── plot_analysis.py           # Epoch-level AUROC collection and trajectory plots
-├── thesis_plots.py            # All publication figures and tables for the thesis
+├── plot_analysis.py           # Epoch-level AUROC summary plots from auroc_by_epoch.csv
+├── thesis_plots.py            # All publication figures and probe dose-response plots
+├── stats_analysis.py          # LaTeX tables + inline \newcommand stats → results/stats/
 ├── config.py                  # Experiment grid (noise × optimizer × dropout × weight decay)
 ├── synth.py                   # Synthetic functions f1–f10 with known ground truth
 ├── NID.py                     # Neural Interaction Detection implementation
 ├── multilayer_perceptron.py   # MLP model definition
-├── missing_exp.py             # Utility to identify incomplete experimental runs
+├── migrate_snapshots.py       # One-off migration of snapshots/ → snapshots_clean/
+├── missing_exp.py             # Lists known-missing experiment conditions
+├── list_runs.py               # Utility: list available run_id subdirs for an experiment
+├── print_summary.py           # Quick AUROC distribution summary to stdout
+├── stats_AUPRC.py             # Standalone AUPRC distribution stats to stdout
+├── wd_effective.py            # Weight-decay effective-regularization analysis
 │
-├── snapshots/                 # Trained model checkpoints (per function / experiment / run)
+├── snapshots_clean/           # Canonical checkpoints — model_size/function/experiment/run_id/
+├── snapshots_probe/           # Checkpoints from dropout/L2 probe sweeps
 ├── results/
 │   ├── small/                 # Per-function analysis CSVs for small architecture
 │   ├── big/                   # Per-function analysis CSVs for big architecture
-│   ├── trajectories/          # Per-epoch AUROC trajectories
+│   ├── trajectories/          # Per-epoch AUROC/loss trajectory CSVs
+│   ├── plots/                 # Epoch-level summary plots (plot_analysis.py output)
+│   ├── stats/                 # LaTeX tables and \newcommand stats (stats_analysis.py)
 │   ├── auroc_by_epoch.csv     # Aggregated epoch-level results
 │   └── thesis_plots/          # Generated figures (.pgf + .png)
+├── results_probe/             # Analysis CSVs for probe sweep experiments
 └── requirements.txt
 ```
 
@@ -66,17 +76,50 @@ python train.py --hidden_units "140,100,60,20"
 #   --l2-const FLOAT        override L2 regularization constant (default: 1e-4)
 ```
 
+#### Probe sweep mode (regularization dose-response)
+
+```bash
+# Dropout sweep — default grid (p ∈ {0, 0.1, 0.2, 0.3, 0.5})
+python train.py --dropout-sweep
+
+# L2 sweep — default grid (λ ∈ {0, 1e-5, 1e-4, 1e-3, 1e-2})
+python train.py --l2-sweep
+
+# Custom grids
+python train.py --dropout-sweep "0.0,0.1,0.4"
+python train.py --l2-sweep "0,1e-4,1e-2"
+
+# Additional sweep flags
+#   --functions F1,F2,...   functions to sweep (default: f1,f7,f8)
+#   --snapshot-root PATH    snapshot output directory (default: snapshots_probe)
+#   --no-mps                force CPU even if MPS is available
+```
+
+Sweep checkpoints land in `snapshots_probe/` and a `sweep_experiments.json` file is written for use with `analysis.py --extra-experiments`.
+
 ### 2. Run analysis
 
 ```bash
 python analysis.py
 
 # Optional flags
-#   --snapshot-root PATH    root folder for snapshots (default: snapshots/)
-#   --num-samples N         samples used for GT generation (default: 30000)
-#   --seed INT              random seed (default: 42)
-#   --run-id ID             select a specific training run by ID
-#   --clean                 delete and recreate results/ subdirs before running
+#   --snapshots-root PATH    root folder for snapshots (default: snapshots_clean)
+#   --results-root PATH      output directory for CSVs (default: results)
+#   --model-size {small,big} filter to one architecture
+#   --function fN            filter to one function (f1–f10)
+#   --experiment NAME        filter to one experiment name from config.EXPERIMENTS
+#   --best-only              only analyze best-epoch checkpoints
+#   --trajectories-only      only generate trajectory CSVs
+#   --dry-run                print planned work without writing files
+#   --overwrite              overwrite existing trajectory CSVs
+#   --extra-experiments FILE JSON file of additional experiments (e.g. sweep_experiments.json)
+```
+
+To analyze probe sweep results, point `--snapshots-root` and `--results-root` at the probe directories:
+
+```bash
+python analysis.py --snapshots-root snapshots_probe --results-root results_probe \
+  --extra-experiments sweep_experiments.json
 ```
 
 ### 3. Collect epoch-level results
@@ -91,10 +134,24 @@ python plot_analysis.py
 python thesis_plots.py
 
 # Optional flags
-#   --results-root PATH       root folder with big/small CSVs (default: results/)
-#   --output-dir PATH         output directory for figures (default: results/thesis_plots/)
-#   --trajectories-dir PATH   directory with trajectory CSVs (default: results/trajectories/)
+#   --results-root PATH         root folder with big/small CSVs (default: results/)
+#   --output-dir PATH           output directory for figures (default: results/thesis_plots/)
+#   --trajectories-dir PATH     directory with trajectory CSVs (default: results/trajectories/)
+#   --prob                      generate probe dose-response figures instead of full thesis suite
+#   --probe-results-root PATH   root folder for probe CSVs (default: results_probe)
 ```
+
+### 5. Generate statistical tables
+
+```bash
+python stats_analysis.py
+
+# Optional flags
+#   --results-root PATH         root folder with big/small CSVs (default: results)
+#   --trajectories-dir PATH     trajectories directory for convergence filter (default: results/trajectories)
+```
+
+Outputs LaTeX tables and inline `\newcommand` stats to `results/stats/`.
 
 ## Experiment design
 
@@ -113,5 +170,3 @@ AUROC and AUPRC are computed over the restricted evaluation space G ∪ D — th
 ## AI-assisted development
 
 A `CLAUDE.md` file is included in the repository with project conventions and codebase context used during AI-assisted development with Claude Code.
-
-
