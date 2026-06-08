@@ -1,0 +1,36 @@
+\contentsline {section}{\numberline {1}Introduction}{2}{section.1}%
+\contentsline {section}{\numberline {2}Literature Review}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Feature interactions and why they matter}{2}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Methods for detecting interactions in neural networks}{3}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Training dynamics: regularisation and interaction learning}{4}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Output noise, memorisation, and recovery trajectories}{4}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Research gap}{4}{subsection.2.5}%
+\contentsline {section}{\numberline {3}Methodology}{5}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Synthetic Data}{5}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Experimental Conditions}{6}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Interaction detection}{6}{subsection.3.3}%
+\contentsline {subsubsection}{\numberline {3.3.1}Theoretical Basis}{6}{subsubsection.3.3.1}%
+\contentsline {subsubsection}{\numberline {3.3.2}Interaction Strength}{6}{subsubsection.3.3.2}%
+\contentsline {subsubsection}{\numberline {3.3.3}Ranking Algorithm}{6}{subsubsection.3.3.3}%
+\contentsline {subsubsection}{\numberline {3.3.4}Cutoff}{7}{subsubsection.3.3.4}%
+\contentsline {subsection}{\numberline {3.4}Model Architecture and Training}{7}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Evaluation Metrics}{7}{subsection.3.5}%
+\contentsline {subsection}{\numberline {3.6}Trajectory Evaluation}{9}{subsection.3.6}%
+\contentsline {subsection}{\numberline {3.7}Convergence Restriction}{9}{subsection.3.7}%
+\contentsline {section}{\numberline {4}Analysis and Results}{11}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Baseline Interaction Recovery}{11}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Effect of Regularisation on Recovery Trajectory}{12}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Effect of Regularisation Strength on Interaction Recovery}{13}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Effect of Noise on Recovery}{14}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Joint Effect of Noise and Regularization}{16}{subsection.4.5}%
+\contentsline {subsection}{\numberline {4.6}Recovery Trajectories Across Conditions}{17}{subsection.4.6}%
+\contentsline {subsection}{\numberline {4.7}Timing of Peak Recovery}{18}{subsection.4.7}%
+\contentsline {subsection}{\numberline {4.8}Optimizer Effect}{19}{subsection.4.8}%
+\contentsline {subsection}{\numberline {4.9}Architecture Comparison}{20}{subsection.4.9}%
+\contentsline {subsection}{\numberline {4.10}AUPRC and Validation Loss}{21}{subsection.4.10}%
+\contentsline {section}{\numberline {5}Discussion}{21}{section.5}%
+\contentsline {section}{\numberline {6}Conclusion}{23}{section.6}%
+\contentsline {section}{\numberline {A}Run-Level Convergence Exclusions}{25}{appendix.1.A}%
+\contentsline {section}{\numberline {B}Full Interaction Recovery Trajectories}{27}{appendix.1.B}%
+\contentsline {section}{\numberline {C}Regularisation Dose--Response Detail}{27}{appendix.1.C}%
+\contentsline {section}{\numberline {D}Official Statement of original thesis}{28}{appendix.1.D}%

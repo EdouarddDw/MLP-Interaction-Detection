@@ -1,20 +1,48 @@
 \documentclass{article}
-\usepackage{graphicx}
+
+% Page layout
+\usepackage[a4paper, margin=2.5cm]{geometry}
+
+% Math
 \usepackage{amsmath}
-\usepackage{natbib}
+\usepackage{amssymb}
+
+% Tables
 \usepackage{booktabs}
-\usepackage{rotating}
 \usepackage{array}
 \usepackage{tabularx}
 \usepackage{threeparttable}
-\usepackage[a4paper, margin=2.5cm]{geometry}
-\usepackage{amssymb}
 \usepackage{multirow}
+
+% Figures and floats
+\usepackage{graphicx}
+\usepackage{rotating}
+\usepackage{float}
+\usepackage{placeins}
 \usepackage{pgfplots}
-\usepackage{float}    % for [H] placement
-\usepackage{placeins} % for \FloatBarrier
+
+% Appendices and PDFs
 \usepackage{appendix}
+\usepackage{pdfpages}
+\providecommand{\mathdefault}[1]{#1}
+
+% Headers and footers
+\usepackage{fancyhdr}
+
+% Citations
+\usepackage{natbib}
+
+% Hyperlinks, load near the end
+\usepackage[
+    colorlinks=false,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+]{hyperref}
+
 \pgfplotsset{compat=1.18}
+
+
 
 % Tighter float placement: floats stay close to their text
 \setcounter{topnumber}{2}
@@ -56,53 +84,58 @@
     \begin{minipage}{0.45\textwidth}
         \begin{flushright}
             \large\textit{Supervisor:}\\
-            \textbf{Selim Eren}
+            \textbf{Selim Eryilmaz} \\
+            \large\textit{Seccond Reader:}\\
+            \textbf{Saleh Hasheremseresht} \\
         \end{flushright}
     \end{minipage}\\[2cm]
     
     {\large Submitted in partial fulfillment of the requirements\\
     for the Bachelor of Science in Business Analytics}\\[1cm]
     
-    {\large May 2026}
+    {\large June 2026}
     
     \vfill
     \thispagestyle{empty}  % No page number on title page
     
 \end{titlepage}
+\pagestyle{fancy}
 
+\fancyhead[L]{\small Regularization and Interaction Recovery in MLPs}
+\fancyhead[R]{\small \nouppercase{\leftmark}}
+
+\fancyfoot[C]{\thepage}
+
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
 \tableofcontents
 \newpage
 
+
 \section{Introduction}
 
-Neural networks have become the dominant modelling paradigm across a wide range
-of prediction tasks, yet their internal representations remain largely opaque.
+Neural networks have become a widely adopted model for a wide range of prediction tasks, yet their internal representations remain largely opaque.
 A central challenge in interpretable machine learning is understanding not only
 which features influence a model's output, but how features combine to do so.
-Feature interactions --- cases where the joint effect of two or more variables
-cannot be decomposed into a sum of their individual contributions --- are a
-primary source of this complexity and are of direct scientific interest in
-domains where understanding the structure of relationships is as important as
+Feature interactions : cases where the joint effect of two or more features on the output cannot be decomposed into a sum of their individual contributions. These feature interactions are a primary source of this complexity and are of direct scientific interest in domains where understanding the structure of relationships is as important as
 predictive accuracy \citep{tsang2020featureinteractioninterpretabilitycase,
 enouen2023sparseinteractionadditivenetworks}. In practice, correctly identifying
 which feature combinations drive a prediction is critical in high-stakes settings
 such as credit scoring, medical diagnosis, and algorithmic hiring, where
 regulators and practitioners increasingly require explanations that go beyond
-individual feature importance.
+individual feature importance \citep{NEURIPS2020_443dec30}.
+
 
 Detecting these interactions reliably is therefore a prerequisite for meaningful
 interpretability. Neural Interaction Detection (NID), proposed by
 \cite{tsang2017detecting}, addresses this by reading interaction structure
 directly from the trained weight matrices of a multilayer perceptron (MLP).
-Rather than searching exhaustively over all possible feature subsets, NID
-exploits the observation that statistical interactions must be routed through
-shared hidden units, and that the strength of an interaction can be
-approximated from the weights connecting input features to the output. Because
-NID operates on the learned weights rather than on model predictions, its
+Instead of searching through all possible feature subsets, NID uses the observable statistical interactions routed in shared hidden units.   NID then uses the strength of the weight connecting features to output as a proxy to measure interaction strength.
+Because NID operates on the learned weights rather than on model predictions, its
 effectiveness is directly tied to the structure that training instils in those
 weights.
 
-This creates a dependency that has received limited systematic attention. The
+This creates a dependency that has received limited attention. The
 weight structure of a trained network is shaped by every design decision made
 during training: the optimiser, the regularisation scheme, the level of noise
 present in the training targets, and the network architecture. If dropout
@@ -118,6 +151,7 @@ these two families of intervention jointly affect the fidelity of interaction
 recovery against a known ground truth, or how recovery evolves across training
 epochs rather than at a single convergence point.
 
+
 This study addresses that gap. Using ten synthetic benchmark functions with
 known ground truth interaction sets, adopted from \cite{tsang2017detecting}, a
 factorial experiment is conducted across five output noise levels ($\eta \in
@@ -128,9 +162,10 @@ epoch, producing a full recovery trajectory for each condition. Three
 dimensions of interaction recovery are examined: the \textit{recovery level},
 defined as the AUPRC achieved at the best epoch; the \textit{recovery
 trajectory}, defined as the sequence of AUPRC values across training epochs;
-and \textit{stability}, operationalised as the consistency of recovery across
+and \textit{stability}, defined as the consistency of recovery across
 the ten benchmark functions under the same experimental condition, measured by
 the standard deviation of per-function AUPRC.
+
 
 The main findings are as follows. Dropout substantially reduces interaction
 recovery, lowering mean AUPRC by \statDropoutDrop\ relative to an
@@ -140,60 +175,82 @@ fundamentally changing the early trajectory shape, suggesting that interaction
 structure is encoded during the early phases of training before label noise
 fitting begins to compete for representational capacity. Validation loss is a
 weak proxy for interaction recovery quality ($\rho = \statSpearmanRho$,
-\statSpearmanP), implying that standard loss-based model selection does not
+$p < 0.001$), implying that standard loss-based model selection does not
 reliably identify models with strong interaction structure. Smaller architectures
 match or outperform the deeper model on the majority of benchmark functions,
 with the largest gaps appearing under adverse conditions.
 
-The remainder of this paper is organised as follows.
-Section~\ref{sec:lit_review} reviews the relevant literature on feature
-interactions, weight-based detection, and the effects of regularisation and
-label noise on training dynamics. Section~\ref{sec:methodology} describes the
-synthetic benchmark functions, experimental conditions, NID implementation, and
-evaluation metrics. Section~\ref{sec:results} presents the results across all
-experimental dimensions. Section~\ref{sec:discussion} synthesises the findings,
-discusses their practical implications, and identifies the limitations of the
-study.
+The code used to generate the data, train the models, and evaluate interaction recovery is publicly available.\footnote{\url{https://github.com/EdouarddDw/MLP-Interaction-Detection}}
+
+
 
 \section{Literature Review}
 \label{sec:lit_review}
 
-\subsection{Feature Interaction}
-In the context of neural networks, statistical interactions are formally defined as interactions between a set of features \(I\). An interaction exists if the model function \(f(x)\) cannot be decomposed into a sum of arbitrary subfunctions that each exclude at least one variable from \(I\) \citep{enouen2023sparseinteractionadditivenetworks, tsang2020featureinteractioninterpretabilitycase}.
+\subsection{Feature interactions and why they matter}
 
-Mathematically, for a feature set \(I = \{x_1, \dots, x_k\}\), a non-additive interaction is present if:
+In the context of neural networks, statistical interactions are formally defined with respect to a set of features \(I\). An interaction exists if the model function \(f(x)\) cannot be decomposed into a sum of arbitrary subfunctions that each exclude at least one variable from \(I\)
+\citep{enouen2023sparseinteractionadditivenetworks, tsang2020featureinteractioninterpretabilitycase}. Mathematically, for a feature set \(I = \{x_1, \dots, x_k\}\), a non-additive interaction is present if:
 \begin{equation}
 f(x) \neq \sum_{i \in I} f_i(x_{I \setminus \{i\}})
 \end{equation}
-This means the entire feature set must be known simultaneously to correctly predict the output; the features do not act independently \citep{enouen2023sparseinteractionadditivenetworks}. A simple example is a multiplicative term \((x_1 \cdot x_2)\), which cannot be represented by adding separate functions of \(x_1\) and \(x_2\) alone \citep{tsang2020featureinteractioninterpretabilitycase}. It is important to distinguish these non-additive interactions from \textit{pure interactions}, which measure the variance explained by a group of variables that cannot be explained by any strict subset of those variables \citep{lengerich2021dropoutregularizerinteractioneffects}.
 
+This means the entire feature set must be known simultaneously to correctly predict the output, the features do not act independently \citep{enouen2023sparseinteractionadditivenetworks}. A simple example is a multiplicative term \((x_1 \cdot x_2)\), which cannot be represented by adding separate functions of \(x_1\) and \(x_2\) alone \citep{tsang2020featureinteractioninterpretabilitycase}. It is important to distinguish these non-additive interactions from \textit{pure interactions}, which measure the variance explained by a group of variables that cannot be explained by any strict subset of those variables \citep{lengerich2021dropoutregularizerinteractioneffects}.
 
-In statistical learning, a ground truth interaction is defined as a non-additive effect \citep{enouen2023sparseinteractionadditivenetworks, wong2021reallytrustyousimple}. Synthetic datasets serve as controlled environments where researchers know the ground truth before training the model \citep{agarwal2024openxaitransparentevaluationmodel}. Functional sums are a common benchmark that generate labels $y$ using functions such as $F(x) = 10x_1x_3 + \sum^{10}_{i=3}x_i$, creating a clear pairwise interaction between $x_1$ and $x_3$ \citep{wong2021reallytrustyousimple, tsang2020featureinteractioninterpretabilitycase}.
+Detecting interactions reliably matters beyond academic interest. In domains such as personalised recommendation and ad targeting, interactions between features often drive the most important predictions, and understanding them is necessary for auditing model behaviour \citep{tsang2020featureinteractioninterpretabilitycase}. More broadly, interpretability requirements in applied settings increasingly demand not just which features are important, but how they combine; a model that produces plausible feature importance scores may still misattribute predictions if the underlying interaction structure is incorrectly recovered. Synthetic datasets with known ground truth interactions provide the controlled environment needed to evaluate detection methods rigorously, since researchers can verify whether recovered interactions match the true ones before the method is deployed on real data \citep{agarwal2024openxaitransparentevaluationmodel, wong2021reallytrustyousimple}.
 
-Weight-based interaction detection relies on the observation that interacting feature paths are encoded in the weight matrices, made possible by the non-linear effect of the activation function \citep{tsang2017detecting, wong2021reallytrustyousimple}. Importantly, \(L_1\) regularization is required to produce the sparse, interpretable weight paths that make this detection feasible \citep{tsang2020featureinteractioninterpretabilitycase}.
+\subsection{Methods for detecting interactions in neural networks}
 
-The effect of regularization on interaction learning has been studied directly by \cite{lengerich2021dropoutregularizerinteractioneffects}, who find that dropout acts as an order-specific regularizer: it decays the effective learning rate of higher-order interactions exponentially. This forces the model to explore simple additive patterns before complex interactions, effectively shaping the trajectory of interaction recovery. In contrast, \(L_2\) regularization, also known as weight decay, penalizes large weights globally and helps prevent overfitting, but does not selectively target higher-order interactions. At high strength, \(L_2\) can even cause training instability, collapsing the model toward constant functions \citep{lengerich2021dropoutregularizerinteractioneffects}.
+Several families of methods exist for detecting feature interactions in neural networks, and they differ substantially in what they measure and how they measure it. Prediction-based methods such as Friedman's H-statistic \citep{friedman2008predictive} quantify interactions by measuring how much the joint partial dependence of two features deviates from the sum of their individual effects. These methods are model-agnostic but computationally intensive and sensitive to the choice of reference distribution \citep{friedman2008predictive}.
 
-Output noise introduces a distinct set of dynamics. In datasets without noise, certain examples are classified correctly within the first epoch, suggesting the model quickly finds simple shared patterns. When labels are pure noise, all examples appear equally difficult and are fit more independently, indicating the absence of any shared structure. In the mixed case, real data combined with noisy labels, a model typically reaches its peak validation accuracy on the real data before it achieves high accuracy on the noisy training labels, suggesting that noise fitting is a later phase in the training trajectory \citep{arpit2017closerlookmemorizationdeep}. Explicit regularization such as dropout can disrupt this memorization process, preserving the model's ability to learn real patterns while hindering its capacity to fit noise \citep{arpit2017closerlookmemorizationdeep}.
+Attribution-based methods, including Shapley interaction values and integrated gradient decompositions \citep{lundberg2017unified}, distribute a model's output back to input pairs and provide theoretically grounded interaction estimates, but typically require many forward passes and can be unstable for higher-order interactions \citep{enouen2023sparseinteractionadditivenetworks}.
 
-Despite the progress outlined above, a clear gap remains in the literature.
-While \cite{lengerich2021dropoutregularizerinteractioneffects} establish that
-dropout and \(L_2\) regularization shape interaction learning in distinct ways,
-and \cite{arpit2017closerlookmemorizationdeep} show that output noise
-fundamentally alters the training trajectory, no work has directly examined how
-these two families of intervention, regularization and output noise,
-jointly affect the fidelity of interaction recovery against a known ground
-truth. Existing studies either evaluate regularization effects on general
-generalization performance, or study noise in the context of memorization,
-without measuring whether the interactions a model recovers across training
-actually match the ground truth interactions embedded in the data. Furthermore,
-the stability of this recovery process --- whether the same
-interactions are reliably recovered across different random seeds,
-initializations, or noise levels --- has not been systematically studied. This
-work addresses that gap by directly measuring interaction recovery trajectories
-under varying regularization schemes and output noise conditions, evaluated
-against synthetic ground truth interactions, and assessing the stability of
-those trajectories across runs.
+The third family of interaction detection builds interpretability methods directly into the model architecture. Sparse interaction additive networks \citep{enouen2023sparseinteractionadditivenetworks} and neural additive models \citep{agarwal2021neural} constrain the model structure to make interactions explicit by design. Since this interpretability is by model design, it cannot be used post hoc on a pre-trained model.
+
+The fourth family is proposed by \cite{tsang2017detecting} and uses weights to read interaction structure. Neural Interaction Detection (NID) detects interactions directly from the learned parameters of a trained feedforward network. The core insight is that statistical interactions must be routed through shared hidden units; any interaction present in the network's function requires at least one hidden unit whose ancestor set at the input layer contains all members of that interaction \citep{tsang2017detecting}. NID scores candidate interactions by aggregating the product of upstream and downstream weight magnitudes, using the minimum weight in an interaction path as a bottleneck measure. Compared to prediction-based and attribution-based alternatives, NID is fast and requires no additional forward passes, making it practical for trajectory evaluation across many epochs.
+
+Its dependence on the learned weight structure also makes it directly sensitive to any training intervention that changes how weights are distributed. Importantly, \(L_1\) regularization is required to produce the sparse, interpretable weight paths that make this detection feasible \citep{tsang2020featureinteractioninterpretabilitycase}, without sparsity, many paths carry non-negligible weight and the interaction signal is diluted.
+
+Because interaction detection is an imbalanced retrieval problem, the number of true interactions is small relative to the full candidate space of all possible feature subsets. Ranking-based evaluation metrics are more informative than accuracy-based ones. With \(p = 10\) features, the space of possible interactions of size two or more contains 1,013 candidates, but the synthetic functions used in \cite{tsang2017detecting} have only three to five ground truth interactions.
+
+Under this imbalance, a detector that assigns high scores to a few true positives before any false positives should be rewarded, which is precisely what the Area Under the Precision-Recall Curve (AUPRC) captures. AUPRC focuses on the positive class and is insensitive to the large number of true negatives that dominate the candidate space, making it the appropriate primary metric for highly imbalanced retrieval tasks of this kind \citep{davis2006relationship}.
+
+\subsection{Training dynamics: regularisation and interaction learning}
+
+The weight structure that NID reads is not fixed by the architecture alone, it is shaped throughout training by the regularisation scheme applied. The theoretical contrast between dropout and weight decay is important for understanding why the two techniques affect interaction recovery differently.
+
+Dropout randomly removes hidden units during each forward pass, preventing any single pathway from becoming overly specialised \citep{lengerich2021dropoutregularizerinteractioneffects}. From the perspective of interaction learning, this is consequential: statistical interactions require stable co-activation of multiple input features through a shared hidden unit \citep{tsang2017detecting}. When dropout stochastically disables units, it disrupts the formation of consistent multi-feature pathways, effectively penalising the network for relying on any particular interaction route.
+
+\cite{lengerich2021dropoutregularizerinteractioneffects} found that dropout acts as an order-specific regularizer that decays the ability of the model to learn higher-order interactions and forces the model to learn simpler additive patterns over more complex ones.
+
+This forces the model to prefer simple additive patterns over complex interactions. The interaction recovery finds fewer higher-order interactions even if there are genuine higher-order interactions in the data. Weight decay applies an \(L_2\) penalty that shrinks all weights towards zero proportionally \citep{Goodfellow-et-al-2016}. Weight decay thus reduces all weights without removing pathways or disturbing ranking or interaction strengths.
+
+When too large, \(L_2\) can cause instability by collapsing the model toward constant outputs \citep{lengerich2021dropoutregularizerinteractioneffects}, but at moderate strength it is substantially less destructive to interaction structure than dropout. This contrast between dropout changing which pathways are active and weight decay only changing their magnitude should entail they have different effects on NID interaction recovery.
+
+\subsection{Output noise, memorisation, and recovery trajectories}
+
+There are two types of noise discussed in the literature. Firstly, \textit{input noise} refers to perturbations added to the feature vector \(x\). This type of noise is used as a form of regularization and is mathematically equivalent to using an \(L_2\) penalty on weights \citep{Goodfellow-et-al-2016}.
+
+\textit{Output noise}, also called label noise, refers instead to perturbations added to the target variable \(y\). This study uses the latter: Gaussian noise proportional to the standard deviation of the clean signal is added to the output of each synthetic function. By definition, output noise does not alter the feature distribution; it degrades only the target signal the model is trying to fit. The Goodfellow equivalence does not apply here, and the two regimes cannot be assumed to produce the same training dynamics or the same effects on learned weight structure.
+
+The dynamics of learning under label noise have been studied in the context of memorization. \cite{arpit2017closerlookmemorizationdeep} show that neural networks learn noisy and clean examples at different times. The model, in early phases of training, learns patterns that generalize across many batches before fitting idiosyncratic or noisy patterns.
+
+The fact that the model learns noise after patterns that generalize over many examples implies that this information is encoded into the weights earlier during training than noise-driven perturbations.
+
+The trajectory of interaction recovery over epochs is as important as final checkpoint evaluation. Evaluating a model at its best validation loss only indicates how well it recovered interaction \citep{apicella2026dontstopnowrethinking}, but misses the full trajectory indicating if the recovery was gradual, stable, or if early learning was later degraded \citep{toneva2019empiricalstudyexampleforgetting}. This motivates using AUPRC as a sequence throughout training epochs rather than a single point, which is a methodological addition to previous research.
+
+\subsection{Research gap}
+
+Existing work has studied feature interaction detection, regularisation, and label noise largely as separate problems. Three specific gaps remain.
+
+First, \cite{lengerich2021dropoutregularizerinteractioneffects} establishes that dropout and \(L_2\) regularization affect interaction learning in different ways, but no previous study has measured how these methods' effects on weight structure affect NID's ability to recover interactions and how much impact they have on the ability of the model to recover ground truth interactions.
+
+Secondly, previous research generally evaluates interaction recovery at convergence or the best validation loss. Interaction recovery trajectory through the training epochs provides insights into how the model learns that endpoint analysis lacks, such as early plateaus, late degradation, or condition-specific timing. Interaction recovery through the training process has not been studied before.
+
+Thirdly, interaction recovery and fidelity of models with combinations of regularization and input noise have not been explored. Studies address either the generalization effect of regularization or memorization dynamics under noise, but not their influence on interpretability.
+
+This study aims to address these three research gaps by using NID to measure interaction recovery through 100 training epochs, under combinations of regularization techniques, output noise, architecture, and optimizers, evaluated against synthetic data with known ground truth interactions.
+
 
 \section{Methodology}
 \label{sec:methodology}
@@ -277,13 +334,13 @@ is interpretable as a fraction of signal variance across all functions,
 regardless of their differing output scales.
 
 Each dataset consists of $N = 30{,}000$ samples generated with a fixed 
-seed 32 for reproducibility. The noise level $\eta$ is varied as an experimental  condition and is described further in Section~\ref{sec:experiments}.
+seed 42 for reproducibility. The noise level $\eta$ is varied as an experimental  condition and is described further in Section~\ref{sec:experiments}.
 
 \subsection{Experimental Conditions}
 \label{sec:experiments}
 All experiments are conducted across all ten benchmark functions described 
-in Section~\ref{sec:synth_data}. Four factors are varied: output noise level 
-$\eta$, optimizer, dropout rate, and weight decay. Table~\ref{tab:experiments} 
+in Section~\ref{sec:synth_data}. Five factors are varied: output noise level 
+$\eta$, optimizer, dropout rate, weight decay and model size. Table~\ref{tab:experiments} 
 summarises all conditions.
 
 \begin{table}[ht]
@@ -299,6 +356,8 @@ Noise $\eta$    & $0,\ 0.1,\ 0.2,\ 0.5,\ 1.0$ \\
 Optimizer       & Adam,\ SGD \\
 Dropout         & None,\ $0.2$ \\
 Weight Decay    & Disabled,\ Enabled ($\lambda = 10^{-4}$) \\
+Model Size      & Small MLP, \ Big MLP\\ 
+
 \bottomrule
 \end{tabular}
 \end{table}
@@ -465,7 +524,7 @@ s_I =
 positives. A ground truth interaction $I \in \mathcal{G} \setminus \mathcal{D}$ 
 that NID fails to propose receives a score of zero, placing it at a 
 disadvantage relative to any false positive with a non-zero strength. A 
-non-interaction $I \notin \mathcal{G}$ that NID does not detect correctly 
+non-interaction $I \notin \mathcal{G}$ that NID does not detect 
 receives score zero with label zero, contributing to the true negative class. 
 The four resulting cases are summarized in 
 Table~\ref{tab:confusion_matrix_auroc}.
@@ -500,10 +559,8 @@ directly evaluates whether ground truth interactions receive high scores before
 false positives accumulate, which is precisely the property of interest when
 assessing interaction recovery fidelity. An alternative ranking-based metric,
 AUROC evaluated over the restricted set $\mathcal{G} \cup \mathcal{D}$,
-was also computed for all conditions and is reported as a secondary measure.
-The two metrics are strongly correlated (Spearman $\rho = 0.968$), confirming 
-that the qualitative findings are robust to the choice of evaluation 
-formulation.
+was also computed for all conditions.
+The two metrics are strongly correlated (Spearman $\rho = 0.968$), confirming that the qualitative findings are robust to the choice of evaluation  formulation.
 
 AUPRC is computed by sweeping a threshold over the ranked score distribution 
 and recording precision and recall at each point. For a threshold $\tau$, 
@@ -590,7 +647,7 @@ contrasting noise $= 0$ and noise $= 1$, and the peak epoch analysis
 examining when recovery plateaus under each condition.
 
 It should be noted that all trajectories are computed from single-seed runs. 
-The observed variability across functions therefore conflates genuine 
+The observed variability across functions therefore includes genuine 
 structural differences between functions with run-to-run randomness, and 
 conclusions about trajectory shape should be interpreted accordingly.
 
@@ -600,14 +657,12 @@ conclusions about trajectory shape should be interpreted accordingly.
 Not all experimental runs produced meaningful learning. Under high output noise or strong
 regularisation, a subset of models failed to reduce their validation loss over the course
 of training, indicating that the network never extracted usable structure from the data.
-Including such runs in the analysis would conflate genuine interaction recovery with the
-behaviour of models that simply did not learn, inflating variance and obscuring the effect
-of the experimental conditions.
+Including such runs in the analysis would mix up genuine interaction recovery with the
+behavior of models that simply did not learn, inflating variance and obscuring the effect of the experimental conditions.
 
 To address this, a convergence criterion was applied uniformly across all analyses. For
 each run, the validation loss at the first recorded epoch was compared to the validation
-loss at the final epoch (epoch 100). A run was deemed non-convergent if the relative
-decrease did not meet a minimum threshold:
+loss at the final epoch (epoch 100). A run was deemed non-convergent if the relative decrease did not meet a minimum threshold:
 
 \begin{equation}
     \frac{\ell_1 - \ell_{100}}{\ell_1} < 0.03
@@ -615,43 +670,31 @@ decrease did not meet a minimum threshold:
 \end{equation}
 
 \noindent where $\ell_1$ and $\ell_{100}$ denote the validation loss at epoch 1 and
-epoch 100 respectively. Any run satisfying this condition, or for which $\ell_1 \leq 0$,
-was excluded. The threshold of 3\% was chosen to be conservative: it removes runs that
-are clearly flat while retaining runs that converge slowly or noisily, such as those
-under dropout regularisation.
+epoch 100 respectively. Any run satisfying this condition
+was excluded. The threshold of 3\% was chosen to be conservative: it removes runs that are clearly flat while retaining runs that converge slowly or noisily, such as those under dropout regularization.
 
 Figure~\ref{fig:loss_vs_auprc_divergence} illustrates the motivation for this criterion.
 At noise~$= 0$, validation loss decreases sharply and AUPRC rises steadily across
 training, confirming that the model learns meaningful feature interactions. At
-noise~$= 1$, validation loss remains near its initial value throughout all 100 epochs
-and AUPRC shows no systematic improvement, indicating a complete failure to extract
-signal from the data. The contrast between these two conditions makes clear that
-retaining non-convergent runs would introduce noise without adding information.
+noise~$= 1$, validation loss remains near its initial value throughout all 100 epochs and AUPRC shows no systematic improvement, indicating a complete failure to extract
+signal from the data. The contrast between these two conditions makes clear that retaining non-convergent runs would introduce noise without adding information.
 
 \begin{figure}[htbp]
     \centering
     \input{plots/loss_vs_auprc_divergence.pgf}
-    \caption{Validation loss and AUPRC ($2^{[10]}$) trajectories over 100 epochs for the
-    base condition (no regularisation) on the small model, averaged across all ten synthetic
-    functions. Shaded regions denote $\pm$1 standard deviation across functions.
-    \textit{Left:} at noise~$= 0$, validation loss decreases rapidly and AUPRC rises
-    steadily, confirming that the model learns meaningful structure.
-    \textit{Right:} at noise~$= 1$, validation loss remains flat from epoch~1 and AUPRC
-    shows no systematic improvement, indicating the model fails to extract any signal.
-    The dashed vertical line marks the epoch at which AUPRC reaches 95\% of its series
-    maximum.}
+    \caption{Validation loss and AUPRC ($2^{[10]}$) trajectories over 100 epochs for the base condition, without regularisation, on the small model, averaged across all ten synthetic functions. Shaded regions denote $\pm$ 1 standard deviation across functions. The left panel shows  $\eta =0$, and the right panel shows $\eta =1$. The dashed vertical line marks the epoch at which AUPRC reaches 95\% of its series maximum.}
     \label{fig:loss_vs_auprc_divergence}
 \end{figure}
 
 Figure~\ref{fig:convergence_removal} summarises the removal rates across all noise levels
-and regularisation conditions. The pattern is consistent across both architectures.
+and regularisation conditions. 16\% of experiments where removed. The pattern is consistent across both architectures.
 Weight decay alone is rarely removed, suggesting that $L_2$ penalisation does not
 prevent the model from reducing validation loss. Dropout conditions are more frequently
-removed, particularly at noise~$= 0.2$ and noise~$= 0$, which is consistent with
+removed, particularly at $\eta= 0.2$ and $\eta= 0$, which is consistent with
 dropout destabilising optimisation in the absence of sufficient noise to regularise
 against. The combined dropout and weight decay condition shows the highest removal rate
 at noise~$= 0$, suggesting that the two regularisers in combination over-constrain
-the network on clean data. At noise~$= 1$, base and dropout conditions are also heavily
+the network on clean data. At $\eta= 1$, base and dropout conditions are also heavily
 affected, reflecting the absence of any learnable signal. A run-level breakdown of which
 specific function and experiment combinations were excluded is provided in
 Appendix~\ref{app:convergence_dots}.
@@ -660,10 +703,7 @@ Appendix~\ref{app:convergence_dots}.
     \centering
     \input{plots/convergence_removal.pgf}
     \caption{Percentage of runs removed by the convergence filter, broken down by noise
-    level and regularisation condition for the small model (left) and big model (right).
-    Removal rates are highly consistent across architectures. Dropout and combined
-    dropout and weight decay conditions are most affected, particularly at low noise
-    levels and at noise~$= 1$ where no learnable signal is present.}
+    level and regularisation condition for the small model (left) and big model (right).}
     \label{fig:convergence_removal}
 \end{figure}
 
@@ -671,7 +711,7 @@ The criterion was applied consistently across all downstream analyses: the best-
 summary results used for all bar charts and heatmaps, the epoch-level trajectories used
 for the recovery trajectory plots, and the peak-epoch summaries used for
 Table~\ref{tab:peak_epoch}. The only exception is Figure~\ref{fig:loss_vs_auprc_divergence}
-itself, which intentionally includes all runs to demonstrate the filtering rationale.
+itself, which intentionally includes all runs to show the rational for the filtering.
 \FloatBarrier
 \section{Analysis and Results}
 \label{sec:results}
@@ -690,13 +730,13 @@ strong source of variance in the results and motivates the two-stage
 aggregation procedure used throughout this section, which averages within
 functions before averaging across them.
 
-Despite the variation in plateau height, the trajectory shape is strikingly
+Despite the variation in plateau height, the trajectory shape is
 consistent across functions. As shown in Figure~\ref{fig:auprc_by_function},
 all functions exhibit a rapid rise in AUPRC during the first 10--20 epochs,
 followed by a stable plateau that persists through epoch 100. This suggests
 that the interaction recovery process itself follows a common structural
 pattern regardless of function complexity, and that the conditions under which
-this process operates --- regularisation, noise, and architecture --- primarily
+this process operates (regularisation, noise, and architecture) primarily
 affect the ceiling rather than the shape of recovery.
 
 The large standard deviations for $f_5$, $f_8$, and $f_{10}$ (0.189, 0.278,
@@ -705,12 +745,11 @@ sensitive to experimental conditions, with some conditions achieving near-perfec
 recovery (AUPRC $= 1.000$) while others approach the random baseline. In
 contrast, $f_9$ shows the smallest standard deviation (0.078), suggesting its
 interaction structure is recovered consistently regardless of the experimental
-condition. These function-level differences are explored further in the
-per-function heatmaps provided in the supplementary material.
+condition.
 
 \begin{table}[htbp]
 \centering
-\caption{Mean AUPRC ($2^{[10]}$) per synthetic function across all experimental conditions.}
+\caption{Mean AUPRC per synthetic function across all experimental conditions.}
 \label{tab:auprc_by_function}
 \begin{tabular}{lrrrr}
 \toprule
@@ -733,7 +772,7 @@ $f_{10}$ & 0.727 & 0.233 & 0.004 & 1.000 \\
 \begin{figure}[htbp]
     \centering
     \input{plots/auprc_by_function.pgf}
-    \caption{AUPRC ($2^{[10]}$) trajectories over 100 epochs for each of the ten
+    \caption{AUPRC trajectories over 100 epochs for each of the ten
     synthetic benchmark functions, averaged across all experimental conditions.}
     \label{fig:auprc_by_function}
 \end{figure}
@@ -743,7 +782,7 @@ $f_{10}$ & 0.727 & 0.233 & 0.004 & 1.000 \\
 \subsection{Effect of Regularisation on Recovery Trajectory}
 
 All regularisation conditions reduce interaction recovery relative to the
-base condition, but to markedly different degrees.
+base condition, but to different degrees.
 Table~\ref{tab:auprc_by_regularization} shows that weight decay is the
 least damaging, reducing mean AUPRC by only 7.1\% relative to base
 (\statWeightDecayMeanAUPRC\ vs \statBaselineMeanAUPRC). Dropout and the
@@ -755,9 +794,8 @@ dropout combined with weight decay suggests that dropout is the dominant
 factor in suppressing recovery, with weight decay adding little additional
 cost once dropout is already applied.
 
-Figure~\ref{fig:auprc_by_regularization} shows that this ordering is not
-a late-epoch phenomenon --- the gap between base and dropout conditions
-opens within the first five epochs and remains stable throughout training.
+Figure~\ref{fig:auprc_by_regularization} shows that this ordering happens in the early phase of model training.
+The gap between base and dropout conditions opens within the first five epochs and remains stable throughout training.
 All conditions follow the same rapid early rise seen in the baseline
 analysis, but the dropout conditions plateau at a lower ceiling. This is
 consistent with the finding of \cite{lengerich2021dropoutregularizerinteractioneffects}
@@ -765,17 +803,16 @@ that dropout acts as an order-specific regulariser, decaying the effective
 learning rate of higher-order interactions and preventing the model from
 fully exploiting the interaction structure present in the data.
 
-Figure~\ref{fig:architecture_x_regularization} confirms that this pattern
-holds across both the small and big architectures. The small model
-consistently outperforms the big model under base and weight decay
+Figure~\ref{fig:architecture_x_regularization} shows that the small model outperformes the big model for 3 out of 4 regularization condition.
+The small model consistently outperforms the big model under base and weight decay
 conditions, while the two architectures converge under dropout, suggesting
 that the capacity advantage of the big model is negated when dropout
-prevents effective interaction learning. This architecture--regularisation
+prevents effective interaction learning. This architecture regularisation
 interaction is discussed further in Section~\ref{sec:arch_comparison}.
 
 \begin{table}[htbp]
 \centering
-\caption{Mean AUPRC ($2^{[10]}$) by regularisation condition, averaged across
+\caption{Mean AUPRC by regularisation condition, averaged across
 all functions, noise levels, and architectures.}
 \label{tab:auprc_by_regularization}
 \begin{tabular}{lrrr}
@@ -793,7 +830,7 @@ Dropout + weight decay & 0.400 & 0.171 & $-$23.7\% \\
 \begin{figure}[htbp]
     \centering
     \input{plots/auprc_by_regularization.pgf}
-    \caption{AUPRC ($2^{[10]}$) trajectories over 100 epochs by regularisation
+    \caption{AUPRC trajectories over 100 epochs by regularisation
     condition, averaged across all functions and noise levels. Shaded regions
     denote $\pm$1 standard deviation across functions.}
     \label{fig:auprc_by_regularization}
@@ -802,24 +839,69 @@ Dropout + weight decay & 0.400 & 0.171 & $-$23.7\% \\
 \begin{figure}[htbp]
     \centering
     \input{plots/architecture_x_regularization.pgf}
-    \caption{Mean AUPRC ($2^{[10]}$) at best epoch by regularisation condition
+    \caption{Mean AUPRC at best epoch by regularisation condition
     and architecture, averaged across all functions and noise levels.
     Error bars denote $\pm$1 standard deviation across functions.}
     \label{fig:architecture_x_regularization}
 \end{figure}
 
 \FloatBarrier
-\subsection{Effect of Noise on Recovery}
 
-Output noise reduces interaction recovery monotonically across all noise
+\subsection{Effect of Regularisation Strength on Interaction Recovery}
+\label{sec:dose_response}
+
+The preceding analysis fixed dropout at $p = 0.2$ and weight decay at
+$\lambda = 10^{-4}$. This leaves open whether the 22.9\% and 7.1\% reductions
+reported in Table~\ref{tab:auprc_by_regularization} are particular to those
+two settings or representative of a broader proportional relationship. To
+probe this, a targeted supplementary sweep was conducted on a representative
+subset of three benchmark functions ($f_1$, $f_7$, $f_8$, spanning the low-,
+mid-, and high-recovery range), holding all other factors at their cleanest
+configuration (small architecture, Adam, $\eta = 0$). Dropout was swept over
+$p \in \{0, 0.1, 0.2, 0.3, 0.5\}$ and weight decay over
+$\lambda \in \{0, 10^{-5}, 10^{-4}, 10^{-3}, 10^{-2}\}$, with each condition
+expressed as the percentage change in best-epoch AUPRC relative to that
+function's own zero-strength anchor before averaging across functions.
+
+Figure~\ref{fig:dose_response} shows the two sweeps. The clearest result is
+asymmetric. Strong dropout ($p = 0.5$) reduces recovery by roughly 40\%
+relative to no dropout, extending the $p = 0.2$ finding to higher rates, but
+the decline across intermediate values is not to be ignored and the per-function
+spread is large. Weight decay produces no reliable degradation at any tested
+strength: mean recovery stays within roughly $\pm 20\%$ of the anchor across
+four orders of magnitude of $\lambda$, reinforcing the main result that $L_2$
+penalization is benign for interaction recovery. The cross-function standard
+deviation widens substantially at intermediate dropout rates and at the
+strongest weight-decay setting, indicating that individual functions respond
+heterogeneously to regularization strength rather than following a common
+curve. At three functions and a single seed, these sweeps characterize the
+general empirical shape of the relationship : clear suppression under strong dropout and tolerance of weight decay. Full per-condition values are reported in Appendix~\ref{app:dose_response}.
+
+\begin{figure}[htbp]
+    \centering
+    \input{plots/regularization_dose_response_pct.pgf}
+    \caption{Dose-response of interaction recovery to regularization strength,
+    on the probe subset ($f_1$, $f_7$, $f_8$; small architecture, Adam,
+    $\eta = 0$). \textit{Left:} percentage change in best-epoch AUPRC versus
+    dropout rate $p$, relative to $p = 0$. \textit{Right:} percentage change
+    versus weight-decay $\lambda$ (log axis), relative to $\lambda = 0$. Points
+    are means across the three functions; error bars denote $\pm$1 standard
+    deviation across functions. Single-seed runs.}
+    \label{fig:dose_response}
+\end{figure}
+\FloatBarrier
+\subsection{Effect of Noise on Recovery}
+\label{sec:effect_of_noise}
+
+Label noise reduces interaction recovery across all noise
 levels, as shown in Table~\ref{tab:auprc_by_noise}. The degradation is
-gradual at low noise levels --- pooled AUPRC drops by only 12.8\% and
-13.2\% at $\eta = 0.1$ and $\eta = 0.2$ respectively --- but accelerates
+gradual at low noise levels. Pooled AUPRC drops by only 12.8\% and
+13.2\% at $\eta = 0.1$ and $\eta = 0.2$ respectively, but accelerates
 at higher levels, reaching a \statNoiseDrop\ reduction at $\eta = 1$
 relative to the noise-free condition (\statNoiseOneMean\ vs
 \statNoiseZeroMean). The step between $\eta = 0.2$ and $\eta = 0.5$
 ($-$13.2\% to $-$24.7\%) is notably larger than the step between $\eta =
-0$ and $\eta = 0.2$, suggesting a threshold effect where moderate label
+0$ and $\eta = 0.2$, suggesting moderate label
 noise is tolerated but high noise substantially impairs the model's ability to
 encode interaction structure in its weights.
 
@@ -847,7 +929,7 @@ recovery.
 
 \begin{table}[htbp]
 \centering
-\caption{Mean AUPRC ($2^{[10]}$) by noise level and architecture.}
+\caption{Mean AUPRC by noise level and architecture.}
 \label{tab:auprc_by_noise}
 \begin{tabular}{lrrrr}
 \toprule
@@ -865,7 +947,7 @@ Noise & Small & Big & Pooled & Drop vs $\eta=0$ (\%) \\
 \begin{figure}[htbp]
     \centering
     \input{plots/auprc_by_noise.pgf}
-    \caption{AUPRC ($2^{[10]}$) trajectories over 100 epochs by noise level,
+    \caption{AUPRC trajectories over 100 epochs by noise level,
     averaged across all functions and experimental conditions. Shaded regions
     denote $\pm$1 standard deviation across functions.}
     \label{fig:auprc_by_noise}
@@ -874,7 +956,7 @@ Noise & Small & Big & Pooled & Drop vs $\eta=0$ (\%) \\
 \begin{figure}[htbp]
     \centering
     \input{plots/noise_effect_by_model_size.pgf}
-    \caption{Mean AUPRC ($2^{[10]}$) at best epoch by noise level and
+    \caption{Mean AUPRC at best epoch by noise level and
     architecture, averaged across all functions and regularisation conditions.
     Error bars denote $\pm$1 standard deviation across functions.}
     \label{fig:noise_effect_by_model_size}
@@ -885,34 +967,48 @@ Noise & Small & Big & Pooled & Drop vs $\eta=0$ (\%) \\
 
 Figure~\ref{fig:summary_heatmap} presents the joint effect of noise level and
 regularisation condition on mean AUPRC, averaged across all functions and both
-architectures. The heatmap reveals that the two factors interact in a broadly
-additive fashion: each independently degrades recovery, and the worst cell
+architectures. The heatmap reveals that the two factors interact some what additively:
+each independently degrades recovery, and the worst cell
 combines both in their most damaging configurations.
 
 The highest mean AUPRC is achieved by the base condition at zero noise (0.59),
-and the lowest by dropout plus weight decay at noise~$= 1$ (0.36). Noise exerts
-a stronger downward pressure than regularisation: moving from $\eta = 0$ to
-$\eta = 1$ reduces mean AUPRC by approximately 0.20--0.27 points depending on
-the regularisation condition, whereas moving from base to the worst
-regularisation condition at a fixed noise level costs at most 0.25 points.
+and the lowest by weight decay at noise $\eta = 1$ (0.32).
+Noise and regularisation impose comparable worst-case penalties:
+the largest noise-induced drop (weight decay, $0.58 \rightarrow 0.32$,
+a fall of 0.26 from $\eta = 0$ to $\eta = 1$)
+is essentially tied with the largest regularisation gap at
+a fixed noise level (base versus dropout + weight decay at $\eta = 0$, $0.59 \rightarrow 0.34$,
+a gap of 0.25). The effect of noise is, however, highly condition-dependent:
+it costs 0.20 points under the base condition and 0.26 under weight decay,
+but leaves the dropout conditions almost unchanged
+(a drop of only 0.07 for dropout, and a marginal \emph{increase} of 0.02 for dropout + weight decay).
+Weight decay is thus the most noise-sensitive regularisation condition,
+whereas dropout is the most noise-robust.
 
-One result that deviates from the additive pattern is the weight decay column.
-Unlike dropout, weight decay maintains relatively high recovery even at high
-noise, reaching 0.47 at $\eta = 0.5$ and 0.32 at $\eta = 1$, both competitive
-with or better than the base condition under the same noise levels. This
-suggests that $L_2$ penalisation interacts differently with label noise than
-dropout does, possibly because weight decay constrains weight magnitude without
-disrupting the relative ordering of interaction path strengths that NID reads.
 
-\begin{figure}[htbp]
+Unlike dropout, weight decay tracks the base condition closely at low to moderate noise,
+matching it at $\eta \in \{ 0, 0.1, 0.2\}$ and slightly exceeding it at $\eta = 0.5$ 
+(0.47 vs 0.45). At $\eta = 1$ this advantage disappears and weight decay falls to 0.32,
+below base, consistent with the absence of any learnable signal at the highest noise level.
+The broader contrast remains: $L_2$ penalisation stays competitive with the unregularised 
+baseline across most of the noise range, whereas dropout depresses recovery throughout,
+possibly because weight decay constrains weight magnitude without disrupting the relative
+ordering of interaction path strengths that NID reads.
+
+
+
+
+\begin{figure}[H]
     \centering
-    \includegraphics[width=\textwidth]{plots/summary_heatmap_noise_x_regularization.png}
-    \caption{Mean AUPRC ($2^{[10]}$) by noise level and regularisation condition,
+    \includegraphics[width=0.85\textwidth]{plots/summary_heatmap_noise_x_regularization.png}
+    \caption{Mean AUPRC by noise level and regularisation condition,
     averaged across all functions and both architectures.}
     \label{fig:summary_heatmap}
 \end{figure}
 
 \FloatBarrier
+
+
 \subsection{Recovery Trajectories Across Conditions}
 
 Figure~\ref{fig:trajectory_highlight} contrasts the four most informative
@@ -948,7 +1044,7 @@ conditions is provided in Appendix~\ref{app:full_trajectories}.
 \begin{figure}[htbp]
     \centering
     \input{plots/interaction_recovery_highlight.pgf}
-    \caption{AUPRC ($2^{[10]}$) recovery trajectories for the base condition and
+    \caption{AUPRC recovery trajectories for the base condition and
     dropout + weight decay condition at noise~$= 0$ (top) and noise~$= 1$ (bottom).
     Grey lines show individual function trajectories; the bold line shows the mean
     across functions with $\pm$1 standard deviation shaded. The full grid across
@@ -956,6 +1052,141 @@ conditions is provided in Appendix~\ref{app:full_trajectories}.
     Appendix~\ref{app:full_trajectories}.}
     \label{fig:trajectory_highlight}
 \end{figure}
+
+
+\FloatBarrier
+\subsection{Timing of Peak Recovery}
+
+Table~\ref{tab:peak_epoch} reports the mean epoch at which peak AUPRC is reached
+for each combination of noise level and regularisation condition. Two patterns
+emerge clearly from the data.
+
+First, the base condition reaches its peak latest at low noise ($40.0 \pm 17.4$
+at $\eta = 0$), while dropout plus weight decay peaks earliest ($8.0 \pm 10.7$
+at $\eta = 0$). This ordering is consistent with the trajectory shapes in
+Figure~\ref{fig:trajectory_highlight}: the base condition continues improving
+gradually throughout training, whereas heavy regularisation forces an early
+plateau. Dropout alone shows an intermediate pattern, peaking around epoch 16
+at $\eta = 0$ and stabilising near epochs 34--42 for moderate noise levels.
+
+
+Second, peak timing appears to interact with the regularisation condition,
+though the large cross-function standard deviations in Table~\ref{tab:peak_epoch} mean these patterns should be read as suggestive rather than firmly established.
+For the base and weight decay conditions, peak timing is relatively stable from $\eta = 0.1$
+to $\eta = 0.5$, clustering in the range of epochs 38 to 46. At $\eta = 1$,
+both peak earlier (22.4 and 25.9), consistent with the absence of a learnable signal preventing any late-epoch improvement.
+The dropout conditions do not show this early-peak shift at $\eta = 1$, if anything dropout peaks later.
+
+The large standard deviations throughout the table reflect genuine variability
+in peak timing across functions rather than measurement noise in the AUPRC
+signal. Functions with complex interaction structures or higher sensitivity to
+experimental conditions peak at very different epochs from simpler functions.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+Noise level & Base & Dropout & Weight decay & Dropout + weight decay \\
+\midrule
+0   & $40.0 \pm 17.4$ & $16.1 \pm 23.2$ & $29.6 \pm 30.9$ & $8.0 \pm 10.7$ \\
+0.1 & $43.6 \pm 15.2$ & $35.1 \pm 14.7$ & $45.9 \pm 13.3$ & $28.5 \pm 20.1$ \\
+0.2 & $38.3 \pm 13.5$ & $42.3 \pm 20.0$ & $42.6 \pm 15.1$ & $37.2 \pm 18.4$ \\
+0.5 & $39.0 \pm 18.6$ & $34.4 \pm 21.7$ & $38.8 \pm 25.3$ & $38.6 \pm 21.2$ \\
+1   & $22.4 \pm 21.1$ & $38.5 \pm 22.3$ & $25.9 \pm 18.4$ & $36.3 \pm 28.2$ \\
+\bottomrule
+\end{tabular}
+\caption{Mean epoch of peak AUPRC by noise level and regularisation
+condition, averaged across all functions. Values denote mean $\pm$ standard
+deviation across functions.}
+\label{tab:peak_epoch}
+\end{table}
+
+
+\FloatBarrier
+\subsection{Optimizer Effect}
+
+Adam consistently outperforms SGD on interaction recovery across all conditions.
+Table~\ref{tab:auprc_by_optimizer} shows a mean AUPRC of \statAdamMean\ for Adam
+versus \statSGDMean\ for SGD, a gap of 0.084 points. Figure~\ref{fig:auprc_by_optimizer}
+reveals that this difference is not only a final-performance effect but a
+trajectory effect: Adam reaches a high plateau within the first five epochs and
+maintains it stably throughout training, while SGD rises more slowly and does not
+converge to a comparable level even by epoch 100. The shaded bands show that both
+optimisers exhibit similar cross-function variance, so the gap is not driven by
+SGD failing on a small number of outlier functions.
+
+The slower convergence of SGD is consistent with its well-known sensitivity to
+learning rate scheduling \citep{schaul2013peskylearningrates}. With a fixed learning rate of 0.01 across all 100
+epochs, SGD does not benefit from Adam's adaptive per-parameter step sizes,
+which appear to be particularly useful for the sparse gradient structure
+produced by $L_1$ regularisation on the interaction weights. The practical
+implication is that, for interaction detection on these benchmark functions 
+optimizer choice is a meaningful source of
+performance variation comparable in magnitude to the effect of moderate noise.
+
+\begin{table}[htbp]
+\centering
+\caption{Mean AUPRC by optimizer, averaged across all other conditions.}
+\label{tab:auprc_by_optimizer}
+\begin{tabular}{lrr}
+\toprule
+Optimizer & Mean AUPRC & SD \\
+\midrule
+Adam & 0.513 & 0.208 \\
+SGD  & 0.429 & 0.171 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\begin{figure}[htbp]
+    \centering
+    \input{plots/auprc_by_optimizer.pgf}
+    \caption{AUPRC trajectories over 100 epochs by optimizer,
+    averaged across all functions and experimental conditions. Shaded regions
+    denote $\pm$1 standard deviation across functions.}
+    \label{fig:auprc_by_optimizer}
+\end{figure}
+
+\FloatBarrier
+
+\subsection{Architecture Comparison}
+\label{sec:arch_comparison}
+
+Table~\ref{tab:architecture_comparison} and Figure~\ref{fig:architecture_comparison}
+show that neither architecture dominates consistently across functions. Of the ten
+benchmark functions, the small model achieves higher mean AUPRC on seven ($f_1$,
+$f_3$, $f_5$, $f_7$, $f_8$, $f_9$, $f_{10}$) while the big model leads on three
+($f_2$, $f_4$, $f_6$). The margins vary considerably: for $f_5$ and $f_8$ the
+small model outperforms the big model by 0.133 and 0.141 points respectively,
+while for $f_2$, $f_4$, and $f_6$ the big model's advantages are modest (0.021,
+0.030, and 0.039).
+
+The consistent advantage of the small model on the higher-performing functions
+($f_5$, $f_8$, $f_{10}$) is noteworthy. These are also the functions with the
+largest standard deviations in Table~\ref{tab:auprc_by_function}, indicating that
+they are the most sensitive to experimental conditions. The pattern is consistent
+with the noise analysis in Section~\ref{sec:effect_of_noise}: greater model capacity
+appears to increase susceptibility to label noise and regularisation, preventing
+the big model from reliably reaching the high AUPRC values that the small model
+achieves under favourable conditions. On the lower-performing functions ($f_1$,
+$f_2$, $f_3$, $f_4$), differences between architectures are much smaller, suggesting that on structurally difficult functions, capacity alone is not
+the limiting factor.
+
+Taken together, the architecture comparison does not support a straightforward
+recommendation in favour of deeper networks for interaction detection. The big
+architecture offers no systematic advantage and incurs meaningful costs on
+functions where interaction recovery would otherwise be higher.
+
+\begin{figure}[htbp]
+    \centering
+    \input{plots/architecture_comparison_big_vs_small.pgf}
+    \caption{Mean AUPRC ($2^{[10]}$) at best epoch for the small and big
+    architectures across all ten synthetic functions, averaged across all
+    experimental conditions.}
+    \label{fig:architecture_comparison}
+\end{figure}
+
 
 \begin{table}[htbp]
 \centering
@@ -980,154 +1211,15 @@ $f_{10}$ & 0.748 & 0.707 & $-$0.041 & Small \\
 \end{tabular}
 \end{table}
 
-
-
 \FloatBarrier
-\subsection{Timing of Peak Recovery}
-
-Table~\ref{tab:peak_epoch} reports the mean epoch at which peak AUPRC is reached
-for each combination of noise level and regularisation condition. Two patterns
-emerge clearly from the data.
-
-First, the base condition reaches its peak latest at low noise ($40.0 \pm 17.4$
-at $\eta = 0$), while dropout plus weight decay peaks earliest ($8.0 \pm 10.7$
-at $\eta = 0$). This ordering is consistent with the trajectory shapes in
-Figure~\ref{fig:trajectory_highlight}: the base condition continues improving
-gradually throughout training, whereas heavy regularisation forces an early
-plateau. Dropout alone shows an intermediate pattern, peaking around epoch 16
-at $\eta = 0$ and stabilising near epochs 34--42 for moderate noise levels.
-
-Second, the effect of noise on peak timing interacts with the regularisation
-condition. For the base and weight decay conditions, peak timing is relatively
-stable across noise levels from $\eta = 0.1$ to $\eta = 0.5$, clustering in
-the range of epochs 38--46. At $\eta = 1$, however, both conditions peak
-earlier (22.4 and 25.9 respectively), consistent with the absence of a
-learnable signal preventing any late-epoch improvement. Dropout conditions
-show the opposite tendency: at $\eta = 1$, dropout peaks later (38.5) than at
-$\eta = 0$ (16.1), suggesting that in the presence of heavy noise, dropout's
-suppression of higher-order learning is partially offset by a slower,
-noisier optimisation process.
-
-The large standard deviations throughout the table reflect genuine variability
-in peak timing across functions rather than measurement noise in the AUPRC
-signal. Functions with complex interaction structures or higher sensitivity to
-experimental conditions peak at very different epochs from simpler functions.
-
-\begin{table}[htbp]
-\centering
-\begin{tabular}{lcccc}
-\toprule
-Noise level & Base & Dropout & Weight decay & Dropout + weight decay \\
-\midrule
-0   & $40.0 \pm 17.4$ & $16.1 \pm 23.2$ & $29.6 \pm 30.9$ & $8.0 \pm 10.7$ \\
-0.1 & $43.6 \pm 15.2$ & $35.1 \pm 14.7$ & $45.9 \pm 13.3$ & $28.5 \pm 20.1$ \\
-0.2 & $38.3 \pm 13.5$ & $42.3 \pm 20.0$ & $42.6 \pm 15.1$ & $37.2 \pm 18.4$ \\
-0.5 & $39.0 \pm 18.6$ & $34.4 \pm 21.7$ & $38.8 \pm 25.3$ & $38.6 \pm 21.2$ \\
-1   & $22.4 \pm 21.1$ & $38.5 \pm 22.3$ & $25.9 \pm 18.4$ & $36.3 \pm 28.2$ \\
-\bottomrule
-\end{tabular}
-\caption{Mean epoch of peak AUPRC ($2^{[10]}$) by noise level and regularisation
-condition, averaged across all functions. Values denote mean $\pm$ standard
-deviation across functions. The large standard deviations reflect substantial
-variability in peak timing across functions rather than across epochs.}
-\label{tab:peak_epoch}
-\end{table}
 
 
-\FloatBarrier
-\subsection{Optimizer Effect}
-
-Adam consistently outperforms SGD on interaction recovery across all conditions.
-Table~\ref{tab:auprc_by_optimizer} shows a mean AUPRC of \statAdamMean\ for Adam
-versus \statSGDMean\ for SGD, a gap of 0.084 points. Figure~\ref{fig:auprc_by_optimizer}
-reveals that this difference is not primarily a final-performance effect but a
-trajectory effect: Adam reaches a high plateau within the first five epochs and
-maintains it stably throughout training, while SGD rises more slowly and does not
-converge to a comparable level even by epoch 100. The shaded bands show that both
-optimisers exhibit similar cross-function variance, so the gap is not driven by
-SGD failing on a small number of outlier functions.
-
-The slower convergence of SGD is consistent with its well-known sensitivity to
-learning rate scheduling. With a fixed learning rate of 0.01 across all 100
-epochs, SGD does not benefit from Adam's adaptive per-parameter step sizes,
-which appear to be particularly useful for the sparse gradient structure
-produced by $L_1$ regularisation on the interaction weights. The practical
-implication is that, for interaction detection on these benchmark functions at
-the training budget used here, optimizer choice is a meaningful source of
-performance variation comparable in magnitude to the effect of moderate noise.
-
-\begin{table}[htbp]
-\centering
-\caption{Mean AUPRC ($2^{[10]}$) by optimizer, averaged across all other conditions.}
-\label{tab:auprc_by_optimizer}
-\begin{tabular}{lrr}
-\toprule
-Optimizer & Mean AUPRC & SD \\
-\midrule
-Adam & 0.513 & 0.208 \\
-SGD  & 0.429 & 0.171 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-
-\begin{figure}[htbp]
-    \centering
-    \input{plots/auprc_by_optimizer.pgf}
-    \caption{AUPRC ($2^{[10]}$) trajectories over 100 epochs by optimizer,
-    averaged across all functions and experimental conditions. Shaded regions
-    denote $\pm$1 standard deviation across functions.}
-    \label{fig:auprc_by_optimizer}
-\end{figure}
-
-
-
-\FloatBarrier
-\subsection{Architecture Comparison}
-\label{sec:arch_comparison}
-
-Table~\ref{tab:architecture_comparison} and Figure~\ref{fig:architecture_comparison}
-show that neither architecture dominates consistently across functions. Of the ten
-benchmark functions, the small model achieves higher mean AUPRC on seven ($f_1$,
-$f_3$, $f_5$, $f_7$, $f_8$, $f_9$, $f_{10}$) while the big model leads on three
-($f_2$, $f_4$, $f_6$). The margins vary considerably: for $f_5$ and $f_8$ the
-small model outperforms the big model by 0.133 and 0.141 points respectively,
-while for $f_2$, $f_4$, and $f_6$ the big model's advantages are modest (0.021,
-0.030, and 0.039).
-
-The consistent advantage of the small model on the higher-performing functions
-($f_5$, $f_8$, $f_{10}$) is noteworthy. These are also the functions with the
-largest standard deviations in Table~\ref{tab:auprc_by_function}, indicating that
-they are the most sensitive to experimental conditions. The pattern is consistent
-with the noise analysis in Section~\ref{sec:results}: greater model capacity
-appears to increase susceptibility to label noise and regularisation, preventing
-the big model from reliably reaching the high AUPRC values that the small model
-achieves under favourable conditions. On the lower-performing functions ($f_1$,
-$f_2$, $f_3$, $f_4$), differences between architectures are small in absolute
-terms, suggesting that on structurally difficult functions, capacity alone is not
-the limiting factor.
-
-Taken together, the architecture comparison does not support a straightforward
-recommendation in favour of deeper networks for interaction detection. The big
-architecture offers no systematic advantage and incurs meaningful costs on
-functions where interaction recovery would otherwise be high.
-
-\begin{figure}[htbp]
-    \centering
-    \input{plots/architecture_comparison_big_vs_small.pgf}
-    \caption{Mean AUPRC ($2^{[10]}$) at best epoch for the small and big
-    architectures across all ten synthetic functions, averaged across all
-    experimental conditions.}
-    \label{fig:architecture_comparison}
-\end{figure}
-
-\FloatBarrier
 \subsection{AUPRC and Validation Loss}
 
 Figure~\ref{fig:auprc_vs_val_loss} plots mean AUPRC against mean validation loss
 at the best epoch for each function--architecture combination. The Spearman
-correlation is \(\rho = \statSpearmanRho\), \(\statSpearmanP\), computed on all
-individual convergent runs, with \(n = \statRetainedRuns\). The negative sign confirms
+correlation is \(\rho = \statSpearmanRho\), \(p < 0.001\), computed on all
+individual convergent runs ( \(n = \statRetainedRuns\)). The negative sign confirms
 that lower validation loss is associated with better interaction recovery, but the
 magnitude is modest: validation loss explains only a small fraction of the
 variance in AUPRC.
@@ -1151,12 +1243,12 @@ that merely reduce the training objective.
 \begin{figure}[htbp]
     \centering
     \input{plots/auprc_vs_validation_loss.pgf}
-    \caption{AUPRC ($2^{[10]}$) at best epoch versus validation loss for each
+    \caption{AUPRC at best epoch versus validation loss for each
     function and architecture. Each point represents the mean over all convergent
     runs for one function--architecture combination. The dashed line shows the
-    linear trend fitted in log-space. Spearman \( \rho = \statSpearmanRho \),
-    \( \statSpearmanP\), computed on all individual convergent runs
-    ( \( $n = \statRetainedRuns\) ), not on the aggregated points shown.}
+    linear trend fitted in log-space. Spearman \(\rho = \statSpearmanRho\),
+    \(p < 0.001\), computed on all individual convergent runs
+    (\(n = \statRetainedRuns\)), not on the aggregated points shown.}
     \label{fig:auprc_vs_val_loss}
 \end{figure}
 
@@ -1164,216 +1256,110 @@ that merely reduce the training objective.
 \section{Discussion}
 \label{sec:discussion}
 
-This study set out to examine how regularisation techniques and output noise
-jointly affect the trajectory and stability of interaction recovery in MLPs,
-evaluated against known ground truth interactions. The results permit several
-substantive conclusions, while also revealing a number of limitations that
-constrain the scope of the findings.
+The objective of this paper was to find how regularization techniques and label noise affect the trajectory and stability of interaction recovery in multi-layer perceptrons, evaluated against ground truth. The results have allowed several conclusions to be drawn, but also reveal a number of limitations that limit the scope of the findings.
 
 \subsection*{Regularisation does not uniformly improve interaction recovery}
 
-The most consistent finding across all conditions is that regularisation
-does not improve interaction recovery relative to an unregularised baseline.
-Dropout reduces mean AUPRC by \statDropoutDrop\ relative to the base
-condition, and the combined dropout and weight decay condition produces a
-nearly identical reduction of \statDropoutWDDrop. This is consistent with
-\cite{lengerich2021dropoutregularizerinteractioneffects}, who show that
-dropout acts as an order-specific regulariser that decays the effective
-learning rate of higher-order interactions. In the context of interaction
-detection, this means that the very mechanism intended to prevent
-overfitting actively suppresses the weight structure that NID relies on to
-identify interactions.
+A consistent finding throughout all experiments is that regularization does not improve interaction recovery in comparison to an unregularized baseline. Dropout lowers mean AUPRC compared to the baseline by \statDropoutDrop\, and dropout in combination with weight decay has a very similar reduction of \statDropoutWDDrop.
 
-Weight decay presents a different picture. Its reduction relative to base
-is modest ($-$7.1\%), and the heatmap in
-Figure~\ref{fig:summary_heatmap} shows that weight decay maintains
-competitive recovery even at high noise levels, outperforming base at
-$\eta = 1$ in some conditions. This suggests that $L_2$ penalization
-constrains weight magnitude without dismantling the relative strength
-differences between interacting and non-interacting paths, which are what
-NID ultimately reads.
+This is consistent with \cite{lengerich2021dropoutregularizerinteractioneffects}, who observe that dropout causes the model to break higher-order interactions, thus lowering the ability of the model to learn these interactions. In the context of interaction detection, this means that the very mechanism intended to prevent overfitting actively suppresses the weight structure that NID relies on to identify interactions.
 
-The near-equivalence of dropout alone and dropout combined with weight
-decay --- mean AUPRC of \statDropoutMeanAUPRC\ and \statDropoutWDMeanAUPRC\
-respectively --- further supports the conclusion that dropout is the
-dominant factor. Once dropout is applied, adding weight decay provides no
-additional recovery, and the two conditions produce statistically
-indistinguishable results across all noise levels.
+Weight decay presents a different picture. Its reduction relative to base is modest
+($-7.1\%$ averaged across noise levels), and the heatmap in
+Figure~\ref{fig:summary_heatmap} shows that weight decay tracks base closely at low to
+moderate noise, even slightly outperforming it at $\eta = 0.5$ ($0.47$ vs $0.45$). Only at
+the highest noise level does it fall below base ($0.32$ vs $0.39$), consistent with the
+ lower learnable signal there. This pattern suggests that $L_2$ penalisation
+constrains weight magnitude without dismantling the relative strength differences between
+interacting and non-interacting paths, which are what NID ultimately reads.
+
+The fact that dropout alone and dropout combined with weight decay are so close (mean AUPRC of \statDropoutMeanAUPRC\ and \statDropoutWDMeanAUPRC{}) further supports the conclusion that dropout is the dominant factor. Once dropout is applied, adding weight decay provides no additional recovery, and the two conditions produce very close results across all noise levels.
 
 \subsection*{Output noise lowers the recovery ceiling without changing early dynamics}
 
-Output noise degrades interaction recovery monotonically, but the
-trajectories in Figure~\ref{fig:auprc_by_noise} suggest that this
-degradation is better characterized as a ceiling effect than as a
-disruption of the recovery process itself. All noise levels share the same
-rapid early rise in the first 10--20 epochs; the trajectories then diverge
-to different plateaus that they maintain stably for the remainder of
-training. This pattern is consistent with
-\cite{arpit2017closerlookmemorizationdeep}, who show that models exposed
-to noisy labels tend to learn real patterns first and fit noise as a later
-phase. If the same ordering holds here, interaction structure is encoded in
-the weights during early training before noise fitting begins to compete
-for representational capacity.
+Output noise degrades interaction recovery monotonically, but the trajectories in Figure~\ref{fig:auprc_by_noise} suggest that this degradation is better characterised as a ceiling effect than as a disruption of the recovery process itself. All noise levels share the same rapid early rise in the first 10--20 epochs; the trajectories then diverge to different plateaus that they maintain stably for the remainder of training.
 
-The threshold-like degradation between $\eta = 0.2$ and $\eta = 0.5$
-($-$13.2\% to $-$24.7\%) is noteworthy and may reflect a regime change
-where noise variance begins to dominate the gradient signal. Below this
-threshold, the model appears to tolerate label noise while still recovering
-meaningful interaction structure. Above it, the signal-to-noise ratio
-deteriorates to the point where interaction recovery is substantially
-impaired. This interpretation is consistent across both architectures,
-though the larger model crosses this threshold at lower noise levels, as
-discussed below.
+These results are in agreement with \cite{arpit2017closerlookmemorizationdeep}, who found that models trained on noisy label data tend to learn real patterns at first before learning noise. If this order is the same, interaction structures are encoded in the weights in the initial phase of training before noise starts to be encoded in later training phases.
 
+Recovery appears relatively robust to low label noise but degrades more readily once noise
+exceeds a moderate level: the pooled decline is gradual through $\eta = 0.2$ and then
+steepens markedly, with the interval between $\eta = 0.2$ and $\eta = 0.5$ accounting for the
+largest single increase in degradation. Caution should be exercised before reading this as a sharp
+threshold or regime change, given the substantial between-function variance, but the pattern
+is at least consistent with noise variance progressively overpowering the interaction signal
+that NID relies on. The two architectures reinforce a familiar capacity--robustness trade-off:
+the larger model achieves the strongest recovery in the noise-free setting yet falls below
+the smaller model under any noise, and the gap widens as noise grows. This suggests that
+added capacity aids interaction recovery only when the signal is clean, and becomes a
+liability as label noise increases the possibility to overfit on the noisy signal.
 \subsection*{Validation loss is a weak proxy for interaction recovery}
 
-One of the more practically relevant findings of this study is that
-validation loss is a poor predictor of interaction recovery quality.
-The Spearman correlation between the two quantities, computed across all
-\statRetainedRuns\ convergent runs, is $\rho = \statSpearmanRho$
-(\statSpearmanP). While the negative sign confirms that lower validation
-loss is generally associated with better AUPRC, the magnitude is weak:
-the scatter plot in Figure~\ref{fig:auprc_vs_val_loss} shows that models
-with similar validation losses achieve AUPRC values spanning almost the
-full observable range.
+One of the more relevant findings is that validation loss is a poor predictor of interaction recovery quality. The Spearman correlation between the two quantities, computed across all \statRetainedRuns\ convergent runs, is $\rho = \statSpearmanRho$ \(p < 0.001\). The fact that the correlation is negative confirms that lower validation loss is generally associated with a higher AUPRC. However, the magnitude of this correlation is weak, and the scatter plot in Figure~\ref{fig:auprc_vs_val_loss} shows that the models achieve AUPRCs spanning almost the full observable range.
 
-This finding has a direct implication for practitioners using NID or
-similar weight-based detection methods. A model selected on the basis of
-validation loss will not reliably be the model with the best interaction
-recovery. The two objectives are only loosely coupled, and conditions that
-reduce validation loss --- such as strong dropout regularisation --- can
-simultaneously suppress the weight structure that makes interaction
-detection possible. Evaluation against ground truth, where available, is
-therefore a necessary complement to standard loss-based model selection.
+This finding entails for anyone using NID, or any similar weight-based method, that a model chosen for its validation loss will not reliably be the model with the highest interaction recovery. Evaluation against ground truth, where available, is therefore a necessary complement to standard loss-based model selection.
 
 \subsection*{Smaller models recover interactions more reliably under adverse conditions}
 
-The architecture comparison reveals no systematic advantage for the deeper,
-wider big model. The small model achieves higher mean AUPRC on seven of
-ten benchmark functions, and the largest margins are precisely on the
-functions where recovery is otherwise high ($f_5$, $f_8$, $f_{10}$). This
-is consistent with the noise analysis: the big model's greater capacity
-appears to increase its susceptibility to label noise and regularisation,
-preventing it from reliably reaching the recovery levels that the small
-model attains under favorable conditions. On structurally difficult
-functions where mean AUPRC is low for both architectures, the difference
-between them is small, suggesting that neither capacity nor simplicity is
-the primary limiting factor in those cases.
+The architecture comparison reveals no systematic advantage for the deeper, wider big model. The small model achieves higher mean AUPRC on seven of ten benchmark functions, and the largest margins are precisely on the functions where recovery is otherwise high ($f_5$, $f_8$, $f_{10}$). This is consistent with the noise analysis: the big model's greater capacity appears to increase its susceptibility to label noise and regularisation, preventing it from reliably reaching the recovery levels that the small model attains with the right conditions.
 
-This finding runs counter to the intuition that more expressive models
-should recover more complex interaction structures more faithfully. It
-instead suggests that, in the regime studied here, the interaction
-detection signal is sufficiently weak that additional capacity provides
-more opportunity to fit spurious patterns than to recover genuine ones.
+More complicated functions with lower average AUPRC on both big and small architectures have very close interaction recovery. This entails that model capacity has little effect on the ability of the model to capture interactions on these more complex functions. We can assume that, in these experimental conditions, interaction detection signals are weak enough to cause larger models to capture spurious patterns and noise instead of finding ground truth interactions.
 
 \subsection*{Limitations}
 
-Several limitations qualify the conclusions above. First, all trajectory
-analyses are based on single-seed runs. The observed variability across
-functions therefore conflates genuine structural differences between
-functions with run-to-run randomness. Replicated experiments with multiple
-seeds would be required to separate these sources of variance and support
-stronger claims about stability.
+Several limitations qualify the conclusions above. First, all trajectory analyses are based on single-seed runs. The observed variability across functions therefore merges genuine structural differences between functions with run-specific randomness. Replicating experiments across multiple seeds would be necessary to separate these deviations and make stronger claims on stability.
 
-Second, the study uses synthetic benchmark functions exclusively. These
-functions were designed to test interaction detection under controlled
-conditions, but they may not represent the difficulty or structure of
-real-world datasets. Results should not be assumed to generalise directly
-to applied settings.
+Second, the exclusive use of benchmark synthetic functions specifically designed to test interactions may give results that are not reproducible using real-world data. Results should not be assumed to generalise directly to applied settings.
 
-Third, NID is treated as the fixed interaction detection instrument
-throughout. The sensitivity of the findings to this choice is not assessed.
-Alternative detection methods, such as those based on Shapley interaction
-indices or neural additive models, may respond differently to the same
-regularisation and noise conditions.
+Third, NID is treated as the only interaction detection method. The sensitivity of the findings to this choice is not assessed. Alternative detection methods, such as those based on Shapley interaction indices or neural additive models, may respond differently to the same regularization and noise conditions.
 
-Fourth, the convergence filter described in Section~\ref{sec:trajectory_eval}
-excludes runs where validation loss did not decrease by at least 3\%
-across training. While this threshold is conservative, it may introduce
-a selection bias toward conditions under which training is more stable,
-potentially understating the failure rates of heavily regularised or
-high-noise configurations in a true deployment setting.
+Fourth, the convergence filter described in Section~\ref{sec:trajectory_eval} excludes runs where validation loss did not decrease by at least 3\% across training. Even though this threshold is conservative, it may create a selection bias for models with more stable training. This might cause the results to underestimate the failure rate of heavily regularized or high-noise experiments.
 
-Fifth, the evaluation criterion treats superset interactions as false
-positives. While this is the strictest possible interpretation of exact
-interaction recovery, it penalises cases where NID recovers the correct
-feature set embedded within a larger proposed interaction, and may
-underestimate partial recovery in higher-order interaction functions.
+Fifth, when classifying detected interactions ($\mathcal{D}$), supersets of ground truth interactions ($\mathcal{G}$) are classified as false positives. This is the strictest interpretation of exact interaction recovery. It penalizes cases when NID recovers the correct feature set embedded within a larger interaction. This may lead to underestimating partial interaction recovery in higher-order interaction functions.
 
-Finally, the noise manipulation in this study adds Gaussian noise to the
-output variable $y$, not to the input features $x$. This is label or
-output noise, and its relationship to regularisation is not the same as
-for input noise. In particular, the formal equivalence between input
-Gaussian noise and $L_2$ regularisation established by
-\cite{Goodfellow-et-al-2016} does not apply here. The effects of output
-noise on interaction recovery trajectories documented in this study should
-therefore be understood as distinct from the dynamics that would arise
-under input perturbation.
+Finally, the noise manipulation in this study adds Gaussian noise to the output variable $y$, not to the input features $x$. This is label or output noise, and its relationship to regularisation is not the same as for input noise. In particular, the formal equivalence between input Gaussian noise and $L_2$ regularisation established by \cite{Goodfellow-et-al-2016} does not apply here. The effects of output noise on interaction recovery trajectories documented in this study should therefore be understood as distinct from the dynamics that would arise under input perturbation.
 
-Several directions for future research follow directly from these limitations.
-Replicating the experiment with multiple random seeds would allow genuine
-function-level stability to be separated from run-to-run randomness, and
-would permit statistical significance testing across conditions. Extending
-the evaluation to real-world datasets with partially known interaction
-structure --- for example, gene expression data where certain interaction
-pairs have been validated experimentally --- would test whether the findings
-transfer beyond synthetic benchmarks. Comparing NID against alternative
-detection instruments, such as methods based on Shapley interaction indices
-or contextual decomposition, under the same noise and regularisation
-conditions would clarify whether the observed sensitivity is specific to
-weight-based detection or reflects a more fundamental limitation of
-interaction recovery under label noise. Finally, exploring input noise as
-a distinct experimental factor, by perturbing features rather than labels,
-would allow a direct empirical comparison between the two noise regimes
-rather than relying on the theoretical equivalence that motivates combining
-them.
+Several directions for future research follow directly from these limitations. Replicating the experiment with multiple random seeds would allow genuine function-level stability to be separated from run-to-run randomness, and would allow statistical significance testing across experiments. Evaluating these experiments on real-world datasets with partially known interaction structures would further test the generality of the findings.
+
+Comparing NID to other interaction detection instruments, such as Shapley or H-statistics, under the same noise and regularization conditions would establish whether the observed results are specific to weight-based methods or are a concrete limitation of recovery under label noise. Finally, exploring input noise as a distinct experimental factor, by perturbing features rather than labels, would allow a direct empirical comparison between the two noise regimes rather than relying on the theoretical equivalence that motivates combining them.
 
 \section{Conclusion}
 
-This study examined how regularisation techniques and output noise jointly
-shape the trajectory and stability of interaction recovery in multilayer
-perceptrons, evaluated against known ground truth interactions using the NID
-framework across ten synthetic benchmark functions.
+This paper studies how regularization techniques and dropout affect trajectory and stability of interaction recover in MLPs, using NID against ground truth.
 
-The central finding is that regularisation does not uniformly support
-interaction recovery. Dropout reduces mean AUPRC by \statDropoutDrop\ relative
-to an unregularised baseline --- a reduction comparable in magnitude to moving
-from zero to high output noise --- while weight decay is substantially more
-benign at $-$7.1\%. The near-identical performance of dropout alone and dropout
-combined with weight decay (\statDropoutMeanAUPRC\ vs \statDropoutWDMeanAUPRC)
-confirms that dropout is the dominant suppressive factor, and that adding weight
-decay once dropout is already applied yields no recovery benefit. These results
-suggest that standard regularisation practice transfers poorly to the interaction
-detection setting: the mechanisms that prevent overfitting in prediction tasks
-can simultaneously prevent the network from encoding the weight structure that
-NID relies on.
+The main finding is that regularisation does not improve interaction recovery. Averaged
+across all noise levels, functions, and architectures, dropout reduces mean AUPRC from the
+unregularised baseline of by $22.9\%$, whereas weight decay is
+much more benign, falling only to $7.1\%$. The combination of the both weight decay and dropout
+changes recovery negligibly ($0.404$to $0.400$).
+This indicates that dropout is the dominant disruptor, and that
+its effect is largely insensitive to whether weight decay is also present. These results
+suggest that standard regularisation practice transfers poorly to the interaction detection
+setting: the mechanisms that prevent overfitting in prediction tasks can simultaneously
+prevent the network from encoding the weight structure that NID relies on.
 
-Output noise lowers the attainable recovery plateau without fundamentally
-altering the early trajectory shape, consistent with the view that interaction
-structure is encoded during the first 10--20 epochs of training before noise
-fitting begins to compete for representational capacity. The degradation
-accelerates markedly between $\eta = 0.2$ and $\eta = 0.5$, pointing to a
-threshold beyond which the gradient signal is dominated by label noise. The
-larger architecture is more susceptible to this effect, yielding lower recovery
-than the small model at $\eta = 1$ despite marginal advantages at $\eta = 0$.
-
-Perhaps the most practically consequential finding is that validation loss is a
-weak proxy for interaction recovery quality (\(\rho = \statSpearmanRho\),
-\(\statSpearmanP\)). Models with similar validation losses achieve AUPRC values
-spanning almost the full observable range, implying that loss-based checkpoint
-selection or condition ranking does not reliably identify the settings that best
-support interaction detection. This decoupling between predictive and
-interpretability objectives has direct implications for applied settings where
-both goals are pursued simultaneously.
+Output noise lowers the attainable recovery plateau without fundamentally altering the early
+trajectory shape, consistent with the view that interaction structure is encoded during the
+first 10--20 epochs of training before noise fitting begins to compete for representational
+capacity. Pooled recovery declines gradually through $\eta = 0.2$ and then more steeply,
+with the interval between $\eta = 0.2$ and $\eta = 0.5$ marking the largest single drop;
+recovery continues to fall at comparable rate to $\eta = 1$, so the pattern is better
+described as an accelerating decline than as a sharp threshold, particularly given the
+substantial between-function variance. The two architectures degrade similarly, though the
+larger model, despite a marginal advantage in the noise-free setting falls below the
+small model at every positive noise level and is lowest at $\eta = 1$, indicating that its
+extra capacity aids recovery only when the signal is clean.
 
 Taken together, these findings suggest that practitioners seeking to use
 weight-based interaction detection should exercise caution when applying
 standard regularisation schemes, prefer smaller over larger architectures when
 interpretability is the primary goal, and evaluate interaction recovery directly
 against available ground truth rather than relying on validation loss as a
-surrogate. Future work replicated across multiple seeds, extended to real-world
+proxy. Future work replicated across multiple seeds, extended to real-world
 datasets, and comparing alternative detection instruments would strengthen
 these conclusions and clarify their scope.
+
+
+\newpage
 
 \bibliographystyle{apalike}
 \bibliography{sources}
@@ -1398,9 +1384,7 @@ condition rather than properties of specific synthetic functions.
 
 \begin{figure}[htbp]
     \centering
-     \resizebox{\textwidth}{0.95\textheight}{%
-    \input{plots/convergence_removal_dots.pgf}
-    }
+    \includegraphics[height=0.88\textheight,keepaspectratio]{plots/convergence_removal_dots.png}
     \caption{Run-level convergence exclusions across all experimental conditions and
     synthetic functions. Rows are grouped by noise level and sorted by regularisation
     condition and optimiser within each group. A filled circle ($\bullet$) indicates
@@ -1412,6 +1396,7 @@ condition rather than properties of specific synthetic functions.
     \label{fig:convergence_removal_dots}
 \end{figure}
 
+\FloatBarrier
 \section{Full Interaction Recovery Trajectories}
 \label{app:full_trajectories}
 
@@ -1425,7 +1410,29 @@ condition rather than properties of specific synthetic functions.
     \label{fig:full_trajectories}
 \end{figure}
 
+\FloatBarrier
+\section{Regularisation Dose--Response Detail}
+\label{app:dose_response}
+
+Table~\ref{tab:dose_response} reports the per-condition best-epoch AUPRC and
+percentage change relative to the zero-strength anchor for the dropout and
+weight-decay sweeps described in Section~\ref{sec:dose_response}.
+
+\input{plots/dose_response.tex}
+
+
+\FloatBarrier
+
+\section{Official Statement of original thesis}
+\clearpage
+\includepdf[
+    pages=1,
+    pagecommand={},
+    fitpaper=true
+]{Thesis Appendix (1).pdf}
+
 \end{appendices}
 
 
 \end{document}
+

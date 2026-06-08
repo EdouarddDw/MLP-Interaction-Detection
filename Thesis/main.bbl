@@ -1,0 +1,70 @@
+\begin{thebibliography}{}
+
+\bibitem[Agarwal et~al., 2024]{agarwal2024openxaitransparentevaluationmodel}
+Agarwal, C., Ley, D., Krishna, S., Saxena, E., Pawelczyk, M., Johnson, N., Puri, I., Zitnik, M., and Lakkaraju, H. (2024).
+\newblock Openxai: Towards a transparent evaluation of model explanations.
+
+\bibitem[Agarwal et~al., 2021]{agarwal2021neural}
+Agarwal, R., Melnick, L., Frosst, N., Zhang, X., Lengerich, B., Caruana, R., and Hinton, G.~E. (2021).
+\newblock Neural additive models: Interpretable machine learning with neural nets.
+\newblock In {\em Advances in Neural Information Processing Systems}, volume~34, pages 4699--4711.
+
+\bibitem[Apicella et~al., 2026]{apicella2026dontstopnowrethinking}
+Apicella, A., Isgrò, F., Pollastro, A., and Prevete, R. (2026).
+\newblock Don't stop me now: Rethinking validation criteria for model parameter selection.
+
+\bibitem[Arpit et~al., 2017]{arpit2017closerlookmemorizationdeep}
+Arpit, D., Jastrzębski, S., Ballas, N., Krueger, D., Bengio, E., Kanwal, M.~S., Maharaj, T., Fischer, A., Courville, A., Bengio, Y., and Lacoste-Julien, S. (2017).
+\newblock A closer look at memorization in deep networks.
+
+\bibitem[Davis and Goadrich, 2006]{davis2006relationship}
+Davis, J. and Goadrich, M. (2006).
+\newblock The relationship between precision-recall and roc curves.
+\newblock In {\em Proceedings of the 23rd International Conference on Machine Learning}, pages 233--240.
+
+\bibitem[Enouen and Liu, 2023]{enouen2023sparseinteractionadditivenetworks}
+Enouen, J. and Liu, Y. (2023).
+\newblock Sparse interaction additive networks via feature interaction detection and sparse selection.
+
+\bibitem[Friedman and Popescu, 2008]{friedman2008predictive}
+Friedman, J.~H. and Popescu, B.~E. (2008).
+\newblock Predictive learning via rule ensembles.
+\newblock {\em The Annals of Applied Statistics}, 2(3):916--954.
+
+\bibitem[Goodfellow et~al., 2016]{Goodfellow-et-al-2016}
+Goodfellow, I., Bengio, Y., and Courville, A. (2016).
+\newblock {\em Deep Learning}.
+\newblock MIT Press.
+\newblock \url{http://www.deeplearningbook.org}.
+
+\bibitem[Lengerich et~al., 2021]{lengerich2021dropoutregularizerinteractioneffects}
+Lengerich, B., Xing, E.~P., and Caruana, R. (2021).
+\newblock Dropout as a regularizer of interaction effects.
+
+\bibitem[Lundberg and Lee, 2017]{lundberg2017unified}
+Lundberg, S.~M. and Lee, S.-I. (2017).
+\newblock A unified approach to interpreting model predictions.
+\newblock In {\em Advances in Neural Information Processing Systems}, volume~30.
+
+\bibitem[Schaul et~al., 2013]{schaul2013peskylearningrates}
+Schaul, T., Zhang, S., and LeCun, Y. (2013).
+\newblock No more pesky learning rates.
+
+\bibitem[Toneva et~al., 2019]{toneva2019empiricalstudyexampleforgetting}
+Toneva, M., Sordoni, A., des Combes, R.~T., Trischler, A., Bengio, Y., and Gordon, G.~J. (2019).
+\newblock An empirical study of example forgetting during deep neural network learning.
+
+\bibitem[Tsang et~al., 2020]{tsang2020featureinteractioninterpretabilitycase}
+Tsang, M., Cheng, D., Liu, H., Feng, X., Zhou, E., and Liu, Y. (2020).
+\newblock Feature interaction interpretability: A case for explaining ad-recommendation systems via neural interaction detection.
+
+\bibitem[Tsang et~al., 2017]{tsang2017detecting}
+Tsang, M., Cheng, D., and Liu, Y. (2017).
+\newblock Detecting statistical interactions from neural network weights.
+\newblock {\em arXiv preprint arXiv:1705.04977}.
+
+\bibitem[Wong et~al., 2021]{wong2021reallytrustyousimple}
+Wong, A., Wang, X.~Y., and Hryniowski, A. (2021).
+\newblock How much can we really trust you? towards simple, interpretable trust quantification metrics for deep neural networks.
+
+\end{thebibliography}
