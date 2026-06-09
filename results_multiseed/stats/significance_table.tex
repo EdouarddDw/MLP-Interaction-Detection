@@ -1,0 +1,22 @@
+\begin{table}[ht]
+\small\centering
+\caption{%
+  Significance tests for headline thesis claims (multi-seed replication,
+  $N_\mathrm{seeds}$ varied across all three seed locations).
+  Claims A--D are Holm--Bonferroni corrected jointly.
+  Claim E (Spearman $\rho$) is not corrected (uninformative at large $n$).%
+}
+\label{tab:significance_multiseed}
+\begin{tabular}{l l r l l l p{3.8cm}}
+\toprule
+Claim & Comparison & $n$ & Effect size & $p$ (raw) & $p$ (Holm) & Verdict \\
+\midrule
+A & Dropout vs Base & 46 & $\Delta\tilde{m}=-0.052$, $r=-0.509$ & 0.003 & 0.010 & Sig.\ drop ($p_\mathrm{adj}=0.010$) \\
+B & Dropout+WD vs Base & 45 & $\Delta\tilde{m}=-0.114$, $r=-0.767$ & $<0.001$ & $<0.001$ & Sig.\ drop ($p_\mathrm{adj}=$<0.001$$) \\
+C & Weight Decay vs Base & 50 & $\Delta\tilde{m}=+0.000$, 95\,\% CI $[-0.014,\,+0.000]$ & 0.424 & 0.424 & Non-inferior (95\,\% CI $\leq+0.000$ AUPRC) \\
+D-Friedman & Noise Friedman ($\eta\in{0.0, 0.5, 1.0}$, base cond.) & 33 & $\chi^2_F=29.29$ & $<0.001$ & $<0.001$ & Sig.\ noise effect ($p_\mathrm{adj}=$<0.001$$) \\
+D-contrast & Noise acceleration ($\eta$: 0$\to$0.5 vs 0.5$\to$1) & 33 & $\Delta\tilde{m}_\mathrm{accel}=+0.142$ & 0.005 & 0.010 & Decline accelerates ($p_\mathrm{adj}=0.010$) \\
+E & AUPRC vs val\_loss (Spearman $\rho$) & 461 & $\rho=-0.140$, 95\,\% CI $[-0.229,\,-0.056]$ & 0.003 & -- & Tracking ($p=0.003$, uncorrected) \\
+\bottomrule
+\end{tabular}
+\end{table}
