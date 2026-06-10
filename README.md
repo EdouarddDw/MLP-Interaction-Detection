@@ -18,6 +18,7 @@ MLP-Interaction-Detection/
 ├── plot_analysis.py           # Epoch-level AUROC summary plots from auroc_by_epoch.csv
 ├── thesis_plots.py            # All publication figures and probe dose-response plots
 ├── stats_analysis.py          # LaTeX tables + inline \newcommand stats → results/stats/
+├── significance.py            # Multi-seed replication + significance testing (Wilcoxon, Friedman, Spearman)
 ├── config.py                  # Experiment grid (noise × optimizer × dropout × weight decay)
 ├── synth.py                   # Synthetic functions f1–f10 with known ground truth
 ├── NID.py                     # Neural Interaction Detection implementation
@@ -40,6 +41,8 @@ MLP-Interaction-Detection/
 │   ├── auroc_by_epoch.csv     # Aggregated epoch-level results
 │   └── thesis_plots/          # Generated figures (.pgf + .png)
 ├── results_probe/             # Analysis CSVs for probe sweep experiments
+├── results_multiseed/
+│   └── stats/                 # Significance test outputs (Wilcoxon, Friedman, Spearman)
 └── requirements.txt
 ```
 
@@ -153,6 +156,21 @@ python stats_analysis.py
 
 Outputs LaTeX tables and inline `\newcommand` stats to `results/stats/`.
 
+### 6. Run significance tests (multi-seed)
+
+```bash
+python significance.py
+
+# Optional flags
+#   --seeds N1,N2,...           seeds to replicate over (default: 42,1,2,3,4)
+#   --results-root PATH         root folder with big/small CSVs (default: results)
+#   --output-dir PATH           output directory for test results (default: results_multiseed/stats)
+#   --noise-levels N1,N2,...    noise levels to test (default: 0,0.1,0.2,0.5,1.0)
+#   --full                      use all five noise levels for Claim D contrast (default: core mode η ∈ {0,0.5,1.0})
+```
+
+Runs paired Wilcoxon signed-rank tests for Claims A–C (dropout, dropout+weight decay, weight decay vs base), a Friedman test and directional noise contrast for Claim D, and Spearman ρ for Claim E (AUPRC vs validation loss). Applies Holm–Bonferroni correction to Claims A–C jointly. Outputs go to `results_multiseed/stats/`.
+
 ## Experiment design
 
 The experiment grid crosses 5 noise levels (σ ∈ {0, 0.1, 0.2, 0.5, 1.0}, as a fraction of the target standard deviation), 2 optimizers (Adam, SGD), 2 dropout settings (none, p = 0.2), and 2 weight-decay settings (disabled, enabled), giving 40 conditions per function. Applied across 10 synthetic functions and 2 architectures (small: [64, 64], big: [140, 100, 60, 20]), this yields 800 total runs. The L2 regularization constant defaults to 1e-4 and can be overridden via `--l2-const`.
@@ -163,9 +181,11 @@ AUROC and AUPRC are computed over the restricted evaluation space G ∪ D — th
 
 ## Key results
 
-- Unregularized base conditions consistently achieve higher AUROC than regularized conditions across all noise levels and both architectures.
-- Weight decay suppresses interaction recovery, with the effect intensifying at larger L2 constants; the trajectory of recovery is slowed rather than merely capped.
-- Input noise lowers the performance ceiling but does not qualitatively alter the relative ranking of regularization conditions.
+- **Dropout is the primary threat to interaction recovery.** Averaged across all noise levels, functions, and architectures, dropout reduces mean AUPRC by 22.9% relative to the unregularised baseline. Weight decay is considerably more benign at −7.1%. Standard regularisation practice therefore transfers poorly to the interaction detection setting.
+- **The dropout + weight decay combination is more harmful than either alone**, particularly at noise levels 0 and 1 in multi-seed analysis — suggesting the effects are at least partially cumulative rather than redundant.
+- **Output noise lowers the recovery plateau without altering the early trajectory shape.** Interaction structure is encoded during the first 10–20 epochs of training, before noise fitting begins to compete for representational capacity. Recovery declines gradually through η = 0.2 and then more steeply, with the largest single drop between η = 0.2 and η = 0.5.
+- **Validation loss is a weak proxy for interaction recovery quality** (Spearman ρ, p < 0.001). Standard loss-based model selection does not reliably identify models with strong interaction structure.
+- **Smaller architectures match or outperform the larger model** on the majority of benchmark functions. The larger model's marginal advantage in the noise-free setting disappears at every positive noise level, with the largest gaps appearing under adverse conditions.
 
 ## AI-assisted development
 

@@ -54,14 +54,19 @@ Schaul, T., Zhang, S., and LeCun, Y. (2013).
 Toneva, M., Sordoni, A., des Combes, R.~T., Trischler, A., Bengio, Y., and Gordon, G.~J. (2019).
 \newblock An empirical study of example forgetting during deep neural network learning.
 
-\bibitem[Tsang et~al., 2020]{tsang2020featureinteractioninterpretabilitycase}
-Tsang, M., Cheng, D., Liu, H., Feng, X., Zhou, E., and Liu, Y. (2020).
+\bibitem[Tsang et~al., 2020a]{tsang2020featureinteractioninterpretabilitycase}
+Tsang, M., Cheng, D., Liu, H., Feng, X., Zhou, E., and Liu, Y. (2020a).
 \newblock Feature interaction interpretability: A case for explaining ad-recommendation systems via neural interaction detection.
 
 \bibitem[Tsang et~al., 2017]{tsang2017detecting}
 Tsang, M., Cheng, D., and Liu, Y. (2017).
 \newblock Detecting statistical interactions from neural network weights.
 \newblock {\em arXiv preprint arXiv:1705.04977}.
+
+\bibitem[Tsang et~al., 2020b]{NEURIPS2020_443dec30}
+Tsang, M., Rambhatla, S., and Liu, Y. (2020b).
+\newblock How does this interaction affect me? interpretable attribution for feature interactions.
+\newblock In Larochelle, H., Ranzato, M., Hadsell, R., Balcan, M., and Lin, H., editors, {\em Advances in Neural Information Processing Systems}, volume~33, pages 6147--6159. Curran Associates, Inc.
 
 \bibitem[Wong et~al., 2021]{wong2021reallytrustyousimple}
 Wong, A., Wang, X.~Y., and Hryniowski, A. (2021).
