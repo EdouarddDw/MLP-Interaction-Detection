@@ -3,6 +3,7 @@
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 
 Empirical study of how regularization and input noise affect interaction recovery in multilayer perceptrons, evaluated against synthetic ground truth using NID.
+Read full paper [here](\Thesis\MLP_Interaction_detection.pdf)
 
 ## Background
 
